@@ -12,6 +12,12 @@ function keyBytes(base64: string) {
   return bytes;
 }
 
+function sameKey(current: ArrayBuffer | null, expected: Uint8Array) {
+  if (!current) return false;
+  const bytes = new Uint8Array(current);
+  return bytes.length === expected.length && bytes.every((value, index) => value === expected[index]);
+}
+
 /** Web Push reminders: register /sw.js, subscribe with the server's VAPID key and save the subscription. */
 export function PushToggle() {
   const { api, notify } = useWorkspace();
@@ -33,8 +39,14 @@ export function PushToggle() {
       const { public_key } = await api<{ public_key: string }>("/api/push/public-key");
       const registration = await navigator.serviceWorker.register("/sw.js");
       await navigator.serviceWorker.ready;
-      const existing = await registration.pushManager.getSubscription();
-      const subscription = existing ?? await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(public_key) });
+      const serverKey = keyBytes(public_key);
+      let existing = await registration.pushManager.getSubscription();
+      if (existing && !sameKey(existing.options.applicationServerKey, serverKey)) {
+        // Subscribed with an older VAPID key: the server cannot deliver to it, so replace it.
+        await existing.unsubscribe().catch(() => undefined);
+        existing = null;
+      }
+      const subscription = existing ?? await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: serverKey });
       const json = subscription.toJSON();
       try {
         await api("/api/push/subscribe", { method: "POST", body: { endpoint: json.endpoint, keys: { p256dh: json.keys?.p256dh, auth: json.keys?.auth } } });
