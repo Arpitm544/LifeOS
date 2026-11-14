@@ -9,10 +9,11 @@ import { useDisplayName } from "@/hooks/use-display-name";
 import { useVoiceInput } from "@/hooks/use-voice-input";
 import { useVoiceOutput } from "@/hooks/use-voice-output";
 import { readableError } from "@/lib/api";
+import { languages, readLanguageSetting, replyLanguage, saveLanguageSetting, scriptLanguage, speechLocale, type LanguageSetting } from "@/lib/language";
 import { formatDeadline, formatHours } from "@/lib/task-utils";
 import type { ChatResponse } from "@/lib/types";
 
-type Message = { id: string; key: string; text: string; status: "sending" | "done" | "error"; response?: ChatResponse; error?: string };
+type Message = { id: string; key: string; text: string; language: string | null; status: "sending" | "done" | "error"; response?: ChatResponse; error?: string };
 const prompts = ["What should I do next?", "Can I fit in a 2-hour project by Friday?", "Plan my day.", "I never work after 9 pm."];
 
 export function ChatWorkspace() {
@@ -25,9 +26,12 @@ export function ChatWorkspace() {
   const input = useRef<HTMLTextAreaElement>(null);
   const end = useRef<HTMLDivElement>(null);
   const sending = messages.some(message => message.status === "sending");
-  const voiceInput = useVoiceInput(value => { setText(value); input.current?.focus(); });
+  const [language, setLanguage] = useState<LanguageSetting>("auto");
+  const heard = useRef<string | null>(null);
+  const voiceInput = useVoiceInput((value, spoken) => { setText(value); heard.current = spoken; input.current?.focus(); });
   const voiceOutput = useVoiceOutput(setVoiceError);
 
+  useEffect(() => { setLanguage(readLanguageSetting()); }, []);
   useEffect(() => {
     const prompt = new URLSearchParams(window.location.search).get("prompt");
     if (prompt) { setText(prompt.slice(0, 1000)); input.current?.focus(); }
@@ -38,7 +42,7 @@ export function ChatWorkspace() {
     setMessages(current => current.map(m => m.id === message.id ? { ...message, status: "sending", error: undefined } : m));
     try {
       // The same Idempotency-Key is reused on retry, so a request that reached the server is not applied twice.
-      const response = await api<ChatResponse>("/api/chat", { method: "POST", headers: { "Idempotency-Key": message.key }, body: { text: message.text, client_tz: preferences.timezone } });
+      const response = await api<ChatResponse>("/api/chat", { method: "POST", headers: { "Idempotency-Key": message.key }, body: { text: message.text, client_tz: preferences.timezone, ...(message.language ? { language: message.language } : {}) } });
       setMessages(current => current.map(m => m.id === message.id ? { ...m, status: "done", response } : m));
       if (response.actions.length) {
         await Promise.all([reloadTasks(), response.actions.some(a => a.type === "preference_set") ? reloadPreferences() : Promise.resolve()]).catch(() => undefined);
@@ -51,7 +55,8 @@ export function ChatWorkspace() {
   function send(value: string) {
     const clean = value.trim().slice(0, 1000);
     if (!clean || sending) return;
-    const message: Message = { id: crypto.randomUUID(), key: crypto.randomUUID(), text: clean, status: "sending" };
+    const message: Message = { id: crypto.randomUUID(), key: crypto.randomUUID(), text: clean, language: replyLanguage(language, heard.current, clean), status: "sending" };
+    heard.current = null;
     setMessages(current => [...current, message]);
     deliver(message);
   }
@@ -79,7 +84,7 @@ export function ChatWorkspace() {
             <p>{response.reply}</p>
             {response.fallback ? <p className="muted fallback-note">The assistant is unavailable right now, so this was handled by quick add.</p> : null}
             {response.actions.map((action, index) => <ActionCard key={action.action_id ?? `${message.id}-${index}`} action={action} />)}
-            <button className="text-button voice-reply" type="button" onClick={() => { setVoiceError(""); if (speaking && (voiceOutput.loading || voiceOutput.playing || voiceOutput.url)) { voiceOutput.stop(); setSpeakingId(null); } else { setSpeakingId(message.id); void voiceOutput.read(response.reply.slice(0, 500)); } }}>{speaking && voiceOutput.playing ? <VolumeX size={16} aria-hidden="true" /> : <Volume2 size={16} aria-hidden="true" />} {speaking && voiceOutput.loading ? "Preparing audio… (click to cancel)" : speaking && voiceOutput.playing ? "Stop reading" : response.reply.length > 500 ? "Listen to first 500 characters" : "Listen"}</button>
+            <button className="text-button voice-reply" type="button" onClick={() => { setVoiceError(""); if (speaking && (voiceOutput.loading || voiceOutput.playing || voiceOutput.url)) { voiceOutput.stop(); setSpeakingId(null); } else { setSpeakingId(message.id); void voiceOutput.read(response.reply.slice(0, 500), speechLocale(message.language ?? scriptLanguage(response.reply))); } }}>{speaking && voiceOutput.playing ? <VolumeX size={16} aria-hidden="true" /> : <Volume2 size={16} aria-hidden="true" />} {speaking && voiceOutput.loading ? "Preparing audio… (click to cancel)" : speaking && voiceOutput.playing ? "Stop reading" : response.reply.length > 500 ? "Listen to first 500 characters" : "Listen"}</button>
             {response.conflicts.length ? <div className="conflict-banner compact" role="alert"><b>Heads up:</b> {response.conflicts.map(c => `${formatHours(c.shortfall_min)} short before ${formatDeadline(c.deadline_at, preferences.timezone)}`).join("; ")}.<Link className="text-button" href="/today">See options <span aria-hidden="true">→</span></Link></div> : null}
             {choice?.options.length ? <div className="chip-row" role="group" aria-label={choice.label || "Choose an answer"}>{choice.options.map(option => <button key={option} className="chip" disabled={!isLast || sending} onClick={() => send(option)}>{option}</button>)}</div> : null}
           </> : null}
@@ -90,6 +95,7 @@ export function ChatWorkspace() {
     {voiceOutput.url ? <audio ref={voiceOutput.element} src={voiceOutput.url} autoPlay onPlay={() => voiceOutput.setPlaying(true)} onEnded={voiceOutput.stop} onError={() => { voiceOutput.stop(); setVoiceError("Could not play the spoken reply."); }} /> : null}
   </div><aside className="side-stack">
       <section className="panel prompts"><h2 className="eyebrow muted">Try asking</h2>{prompts.map(prompt => <button key={prompt} disabled={sending || voiceInput.listening || voiceInput.processing} onClick={() => { setText(prompt); input.current?.focus(); }}>“{prompt}” <span aria-hidden="true">→</span></button>)}</section>
+      <section className="panel chat-language"><h2 className="eyebrow muted">Language</h2><label className="sr-only" htmlFor="chat-language">Reply language</label><select id="chat-language" value={language} onChange={e => { const value = e.target.value as LanguageSetting; setLanguage(value); saveLanguageSetting(value); }}><option value="auto">Auto — match how I speak or type</option>{languages.map(l => <option key={l.code} value={l.code}>{l.label}</option>)}</select><p>Speak or type in any of these. LifeOS replies in the same language and reads replies aloud with a matching voice.</p></section>
       <section className="panel chat-help"><h2 className="eyebrow muted">Have a syllabus?</h2><p>Upload it and LifeOS adds every deadline and plans the time. <Link className="text-button" href="/import">Import a syllabus <span aria-hidden="true">→</span></Link></p></section>
       <section className="panel chat-help"><h2 className="eyebrow muted">Good to know</h2><p>Deletes and changes to more than three items ask you first. Reply with the buttons or type “yes” or “no”.</p><p>Messages on this screen clear when you leave it. Your tasks, events and preferences are saved to your account.</p></section>
     </aside></div>;

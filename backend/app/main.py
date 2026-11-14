@@ -104,7 +104,8 @@ async def chat(request: ChatRequest, idempotency_key: Optional[str] = Header(def
             if existing.request_hash != request_hash:
                 raise HTTPException(status_code=409, detail='Idempotency key reused with a different request')
             return existing.response
-    result = await handle_chat(session, user_id=user_id, text=request.text, client_tz=request.client_tz)
+    result = await handle_chat(session, user_id=user_id, text=request.text, client_tz=request.client_tz,
+                               language=request.language)
     if idempotency_key:
         session.add(IdempotencyRecord(key=idempotency_key, user_id=user_id, response=result, request_hash=request_hash))
     await session.commit()

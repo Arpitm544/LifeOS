@@ -48,6 +48,7 @@ tests/                    # API client, validation, timezone filters and prefere
 - Tasks, preferences, routines, Today and Insights are loaded from and saved to the backend API. Chat requests go to the API, but the conversation on screen is kept only for the current visit.
 - Timezone, work/focus/quiet hours, reminder lead, estimate padding and a per-device reduced-motion setting.
 - Chat calls `POST /api/chat` and shows action cards with Undo, clarification and confirmation chips.
+- Chat is multilingual: speak or type in English, Hindi (including Hinglish), Spanish, French, German, Portuguese, Italian, Dutch, Russian or Japanese and LifeOS replies in that language. The detected spoken language (or a per-device choice in Chat) is sent as `language`; replies are read aloud by a Deepgram voice when `DEEPGRAM_TTS_VOICES` has one for that language, otherwise by the device voice.
 - Chat supports microphone transcription and spoken replies through authenticated Deepgram routes when `DEEPGRAM_API_KEY` is configured. Each route reserves a backend quota before contacting Deepgram: five requests per user per minute for transcription and five for speech. The backend and migration 006 must be available; quota errors fail closed.
 
 ## Backend

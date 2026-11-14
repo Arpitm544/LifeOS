@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 
-export function useVoiceInput(onTranscript: (text: string) => void) {
+export function useVoiceInput(onTranscript: (text: string, language: string | null) => void) {
   const [supported, setSupported] = useState<boolean | null>(null);
   const [listening, setListening] = useState(false);
   const [processing, setProcessing] = useState(false);
@@ -65,7 +65,7 @@ export function useVoiceInput(onTranscript: (text: string) => void) {
       if (typeof result?.text !== "string" || !result.text.trim()) throw new Error("No speech detected. Please record again.");
       const text = [saved.prefix.trim(), result.text.trim()].filter(Boolean).join(" ");
       if (text.length > 1000) throw new Error("Your draft plus recording exceeds 1,000 characters. Shorten the draft or record a shorter message.");
-      callback.current(text); recording.current = null;
+      callback.current(text, typeof result.language === "string" ? result.language : null); recording.current = null;
     } catch (e) {
       if (!controller.signal.aborted) { setError(e instanceof Error ? e.message : "Transcription failed. Please retry."); setCanRetry(retryable); if (!retryable) recording.current = null; }
     } finally {

@@ -67,6 +67,8 @@ class TaskPatch(BaseModel):
 class ChatRequest(BaseModel):
     text: str = Field(min_length=1, max_length=1000)
     client_tz: str = "UTC"
+    # Reply language as a BCP 47 code ("hi", "es", "pt-BR"); omitted means "match the message".
+    language: Optional[str] = Field(default=None, pattern=r"^[a-z]{2,3}(-[A-Za-z0-9]{2,8})?$")
 
     @field_validator('client_tz')
     @classmethod
