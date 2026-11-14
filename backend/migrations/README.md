@@ -59,4 +59,4 @@ insert into lifeos_identity_map values ('11111111-1111-4111-8111-111111111111', 
 
 New routine anchors use explicit input or the user's local creation date. Existing routines created under the old `2026-01-01` default have no stored creation date: do not blindly reset these anchors, which could restart completed COUNT rules. Before rollout, identify affected routines and backfill their verified first-occurrence date (YYYY-MM-DD) per routine ID. This requires operator input; the application cannot reconstruct it.
 
-For the repair acceptance suite, point `REPAIR_TEST_DATABASE_URL` at an **isolated disposable PostgreSQL cluster without a lifeos_api role**, then run `python -m pytest tests/test_postgres_repairs.py -q`. It creates/drops test databases and the test role; never point it at a shared or production cluster.
+For the repair acceptance suite, point `REPAIR_TEST_DATABASE_URL` at an **isolated disposable PostgreSQL cluster without a lifeos_api role**, then from the `backend` directory run `python -m pytest tests/test_postgres_repairs.py -q`. It creates/drops test databases and the test role; never point it at a shared or production cluster.
