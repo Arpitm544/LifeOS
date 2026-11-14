@@ -4,6 +4,7 @@ import Link from "next/link";
 import { Mic, Square, Volume2, VolumeX } from "lucide-react";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { ActionCard } from "@/components/chat/action-card";
+import { AgentSteps } from "@/components/chat/agent-steps";
 import { useWorkspace } from "@/components/providers/workspace-provider";
 import { useDisplayName } from "@/hooks/use-display-name";
 import { useVoiceInput } from "@/hooks/use-voice-input";
@@ -84,6 +85,7 @@ export function ChatWorkspace() {
             <p>{response.reply}</p>
             {response.fallback ? <p className="muted fallback-note">The assistant is unavailable right now, so this was handled by quick add.</p> : null}
             {response.actions.map((action, index) => <ActionCard key={action.action_id ?? `${message.id}-${index}`} action={action} />)}
+            {response.steps?.length ? <AgentSteps steps={response.steps} open={isLast} /> : null}
             <button className="text-button voice-reply" type="button" onClick={() => { setVoiceError(""); if (speaking && (voiceOutput.loading || voiceOutput.playing || voiceOutput.url)) { voiceOutput.stop(); setSpeakingId(null); } else { setSpeakingId(message.id); void voiceOutput.read(response.reply.slice(0, 500), speechLocale(message.language ?? scriptLanguage(response.reply))); } }}>{speaking && voiceOutput.playing ? <VolumeX size={16} aria-hidden="true" /> : <Volume2 size={16} aria-hidden="true" />} {speaking && voiceOutput.loading ? "Preparing audio… (click to cancel)" : speaking && voiceOutput.playing ? "Stop reading" : response.reply.length > 500 ? "Listen to first 500 characters" : "Listen"}</button>
             {response.conflicts.length ? <div className="conflict-banner compact" role="alert"><b>Heads up:</b> {response.conflicts.map(c => `${formatHours(c.shortfall_min)} short before ${formatDeadline(c.deadline_at, preferences.timezone)}`).join("; ")}.<Link className="text-button" href="/today">See options <span aria-hidden="true">→</span></Link></div> : null}
             {choice?.options.length ? <div className="chip-row" role="group" aria-label={choice.label || "Choose an answer"}>{choice.options.map(option => <button key={option} className="chip" disabled={!isLast || sending} onClick={() => send(option)}>{option}</button>)}</div> : null}
