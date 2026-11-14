@@ -162,13 +162,20 @@ async def plan_today(session, user_id: str, *, now: datetime) -> bool:
     session.add(ActivityEvent(user_id=user_id, type='daily_plan_built', occurred_at=now,
                               payload={'date': local.date().isoformat()}))
     result = await rebuild_plan(session, user_id, now=now)
+    await session.flush()
     today = [b for b in result['blocks'] if _utc(b.start_at) < midnight + timedelta(days=1)]
-    if not today:
+    # The push is the morning brief: what is planned, plus any deadline at risk (proactive, no LLM).
+    from .services.brief_service import compose, load_brief_data, push_message
+    brief = compose(await load_brief_data(session, user_id, now=now))
+    target = today[0].task_id if today else next(
+        (row.id for row in (await session.execute(select(Task).where(Task.user_id == user_id,
+            Task.status.in_(['open', 'blocked'])).order_by(Task.priority_score.desc()).limit(1))).scalars()), None)
+    if not today and not brief['counts']['at_risk'] and not brief['counts']['overdue']:
         return False
-    hours = sum((_utc(b.end_at) - _utc(b.start_at)).total_seconds() for b in today) / 3600
-    session.add(Reminder(user_id=user_id, item_type='task', item_id=today[0].task_id, kind='daily_plan',
-        fire_at=now, status='pending',
-        message=f'Your plan for today is ready: {len({b.task_id for b in today})} tasks, {hours:.1f} h of focus.'))
+    if target is None:
+        return False
+    session.add(Reminder(user_id=user_id, item_type='task', item_id=target, kind='daily_plan',
+        fire_at=now, status='pending', message=push_message(brief)[:300]))
     return True
 
 
