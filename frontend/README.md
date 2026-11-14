@@ -10,7 +10,7 @@ npm ci
 npm run dev
 ```
 
-Open http://127.0.0.1:3000. Node 22.6 or newer is required; tests use Node's TypeScript stripping support.
+Open http://localhost:3000. Use this hostname consistently for Clerk development sessions. Node 22.6 or newer is required; tests use Node's TypeScript stripping support.
 
 ```sh
 npm run typecheck
@@ -22,8 +22,11 @@ npm run build
 
 ```text
 src/
-  app/                    # Routes: today, chat, tasks, insights, profile
-    globals.css           # Shared tokens, component styling, responsive layouts
+  app/
+    (workspace)/        # Protected routes: today, chat, tasks, insights, profile
+    sign-in/             # Public Clerk sign-in
+    sign-up/             # Public Clerk sign-up
+    globals.css          # Shared tokens, component styling, responsive layouts
   components/
     layout/               # App shell, desktop/mobile navigation, page heading
     tasks/                # Task cards and create/edit form
@@ -41,14 +44,31 @@ tests/                    # Validation, timezone filters and storage checks
 
 - Responsive desktop and mobile navigation across all five screens.
 - Create, edit, complete, reopen and delete tasks; title search and time-aware filters.
-- Browser-local persistence for tasks and preferences, with validation and visible storage errors.
+- Clerk sign-in/sign-up, protected workspace pages, and account/sign-out controls.
+- Browser-local persistence for tasks and preferences, isolated by Clerk user ID, with validation and visible storage errors.
 - Name, timezone, work/focus/quiet hours, protected evenings and reduced-motion settings.
 - Browser speech recognition with a 30-second limit, editable transcript, permission/error states, and optional spoken preview. Audio is not recorded by LifeOS; the browser speech provider may process it remotely.
 - Sample AI conversation and explicit save-as-task/Undo actions. Chat is **not connected to an LLM** and does not infer dates or execute scheduling. Messages remain in memory for the current visit to Chat.
 
 ## Integration boundaries
 
-No authentication, API, database, reminder worker, AI provider, or calendar integration is implemented. Sign-in belongs to the authentication teammate. Do not add provider secrets to this frontend.
+Clerk authentication uses application `app_3M5laGFEp747pBJvQVYMWptOQwT`. The API, database, reminder worker, AI provider, and calendar integrations remain for later. The auth branch is based on the frontend branch.
+
+The Clerk CLI writes development keys to the ignored `frontend/.env.local`; never commit it or print its contents. On another machine, sign into Clerk in your own terminal, then pull this application's development keys:
+
+```sh
+cd frontend
+npx -y clerk@latest auth login
+npx -y clerk@latest link --app app_3M5laGFEp747pBJvQVYMWptOQwT
+npx -y clerk@latest env pull
+npx -y clerk@latest doctor
+```
+
+`src/proxy.ts` initializes Clerk. The server layout for `(workspace)` requires authentication with `auth.protect()`. Sign-in and sign-up remain public and return users to `/today` by default. `UserButton` provides account management and sign-out on desktop and mobile.
+
+Tasks and preferences remain browser-local, not cloud-synced. Each signed-in user gets a separate storage key. The previous anonymous demo storage is preserved but is not automatically imported into an account. This avoids assigning one person's demo workspace to another person. Local browser storage is not a substitute for backend authorization or protection on shared browser profiles.
+
+Development authentication is configured; production Clerk configuration and domains are not set up. No users are created automatically.
 
 `WorkspaceProvider` currently owns browser-local mutations. Replace these actions with authenticated backend calls when endpoints are available. The planned chat endpoint is `POST /api/chat` with `{ text, source: "text" | "voice", client_tz }` and a Clerk session bearer token; follow `docs/PRD.md` for the full backend response contract. Keep token acquisition at that integration boundary.
 

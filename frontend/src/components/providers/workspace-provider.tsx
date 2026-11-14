@@ -4,6 +4,7 @@ import { createContext, useContext, useEffect, useRef, useState, type ReactNode 
 import { defaultPreferences, demoTasks } from "@/lib/demo-data";
 import { parseWorkspace, validatePreferences, validateTask } from "@/lib/task-utils";
 import type { Preferences, Task, TaskInput } from "@/lib/types";
+import { workspaceStorageKey } from "@/lib/workspace-storage";
 
 type Workspace = {
   tasks: Task[]; preferences: Preferences; ready: boolean; notice: string;
@@ -14,9 +15,9 @@ type Workspace = {
   savePreferences: (preferences: Preferences) => void;
 };
 const Context = createContext<Workspace | null>(null);
-const key = "lifeos.workspace.v1";
 
-export function WorkspaceProvider({ children }: { children: ReactNode }) {
+export function WorkspaceProvider({ children, userId }: { children: ReactNode; userId: string }) {
+  const key = workspaceStorageKey(userId);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [preferences, setPreferences] = useState(defaultPreferences);
   const [ready, setReady] = useState(false);
@@ -44,7 +45,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     }
     window.addEventListener("storage", sync);
     return () => window.removeEventListener("storage", sync);
-  }, []);
+  }, [key]);
 
   useEffect(() => {
     if (!ready || !canPersist.current) return;
@@ -52,7 +53,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     if (raw === lastSaved.current) return;
     try { localStorage.setItem(key, raw); lastSaved.current = raw; }
     catch { notify("Browser storage is unavailable. Keep this tab open; changes will not survive a reload."); }
-  }, [tasks, preferences, ready]);
+  }, [tasks, preferences, ready, key]);
 
   useEffect(() => {
     document.documentElement.dataset.reducedMotion = String(preferences.reducedMotion);
