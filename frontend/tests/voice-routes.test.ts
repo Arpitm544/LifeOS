@@ -8,7 +8,7 @@ for (const [route, service] of [["transcribe", "transcriptionResponse"], ["speak
   test(`${route} requires authentication and same-origin before calling the provider`, async () => {
     let userId: string | null = null, calls = 0, quotaCalls = 0;
     let quotaResult: Response | null = null;
-    const source = readFileSync(new URL(`../src/app/api/${route}/route.ts`, import.meta.url), "utf8").replace(/^import .*;\n/gm, "").replace("export async function POST", "async function POST");
+    const source = readFileSync(new URL(`../src/app/api/${route}/route.ts`, import.meta.url), "utf8").replace(/^import .*;\r?\n/gm, "").replace("export async function POST", "async function POST");
     const handler = runInNewContext(stripTypeScriptTypes(source) + "; POST;", {
       auth: async () => ({ userId, getToken: async () => "session-token" }),
       voiceQuota: async (token: string, kind: string) => {
