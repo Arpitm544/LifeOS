@@ -167,7 +167,10 @@ async def undo_logged_action(session, owner, action_id):
             start, end = values['start_at'], values['end_at']
             overlap = select(PlanBlock.id).where(PlanBlock.user_id == owner,
                 PlanBlock.status == 'planned', PlanBlock.start_at < end, PlanBlock.end_at > start)
-            if (await session.execute(overlap)).first():
+            event_overlap = select(Event.id).where(Event.user_id == owner, Event.cancelled == False,
+                Event.start_at < end + timedelta(minutes=10), Event.end_at > start - timedelta(minutes=10))
+            if (await session.execute(overlap)).first() or (await session.execute(event_overlap)).first():
+                raise HTTPException(status_code=409, detail='Restored block would overlap planned work')
                 raise HTTPException(status_code=409, detail='Restored block would overlap planned work')
         session.add(model(**values))
         log.undone_at = datetime.now(timezone.utc)
