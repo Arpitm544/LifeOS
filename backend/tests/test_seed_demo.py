@@ -17,7 +17,7 @@ class DemoFixturesTest(unittest.TestCase):
         self.assertTrue(all(task["effort_actual_min"] / task["effort_est_min"] == 1.6 for task in study))
         ids = {task["id"] for task in rows["tasks"]}
         self.assertTrue(all(block["task_id"] in ids for block in rows["plan_blocks"]))
-        self.assertTrue(all(row["user_id"] == owner for table in rows.values() for row in table))
+        self.assertTrue(all(row["user_id"] == str(owner) for table in rows.values() for row in table))
         self.assertTrue(all(event["start_at"].tzinfo == timezone.utc for event in rows["events"]))
         self.assertEqual(len(rows["events"]), 7)  # five classes plus two shifts
 

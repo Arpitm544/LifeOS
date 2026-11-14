@@ -26,18 +26,18 @@ Copy `.env.example` to `.env` before connecting PostgreSQL/Supabase. The install
 ## Planned implementation order
 ### Demo fixtures
 
-Use a dedicated existing Supabase demo account. The seed script does not create an Auth account or apply migrations. Configure `DATABASE_URL` in `.env` and apply migrations first.
+Use a dedicated existing Clerk demo account. The seed script does not create an Auth account or apply migrations. Configure `DATABASE_URL` in `.env` and apply migrations first.
 
 Preview without dependencies or a database:
 
 ```bash
-python3 seed_demo.py --user-id 11111111-1111-4111-8111-111111111111 --date 2026-11-14 --dry-run
+python3 seed_demo.py --user-id user_demo --date 2026-11-14 --dry-run
 ```
 
-Load using the actual demo account UUID:
+Load using the actual demo Clerk subject:
 
 ```bash
-.venv/bin/python seed_demo.py --user-id YOUR_DEMO_USER_UUID
+.venv/bin/python seed_demo.py --user-id YOUR_DEMO_CLERK_SUBJECT
 ```
 
 Fixtures include 14 days of labelled synthetic completions, a study effort factor of 1.6, classes, café shifts, gym, preferences, upcoming tasks, and a reminder. Same account/date reruns skip existing fixtures; existing preferences are preserved. Changing the reference date creates another fixture set. All rows are inserted in one transaction. This seeds data only; it does not establish that the full demo flow or push delivery works.
@@ -50,3 +50,9 @@ Fixtures include 14 days of labelled synthetic completions, a study effort facto
 
 The API contract keeps timestamps in UTC and accepts the client timezone for local-date parsing, as required by the PRD.
 
+
+Local PostgreSQL without TLS: set `DATABASE_SSL=false`. Hosted databases keep the default `true`; the wheel includes the Supabase CA and fails if that packaged asset is missing.
+
+Chat uses `ANTHROPIC_API_KEY` and `ANTHROPIC_MODEL` (default `claude-sonnet-4-5`). No-action provider replies do not create tasks. Missing credentials, transport failures and malformed provider responses use quick-add; past deadlines ask for clarification.
+
+Apply migration 006 before starting this version. Runtime rate limits use PostgreSQL transactions and a per-user/bucket advisory lock across all workers. Expired rows for inactive users are removed on subsequent API traffic by the bounded-permission cleanup function. Development tests may inject the in-memory limiter.

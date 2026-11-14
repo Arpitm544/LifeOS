@@ -9,14 +9,14 @@ from jose import JWTError, jwt
 _cache = {}
 
 
-async def load_jwks(issuer):
+async def load_jwks(jwks_url):
     now = time.monotonic()
-    cached = _cache.get(issuer)
+    cached = _cache.get(jwks_url)
     if cached and cached[0] > now:
         return cached[1]
     try:
         async with httpx.AsyncClient(timeout=5, follow_redirects=False) as client:
-            response = await client.get(issuer + '/.well-known/jwks.json')
+            response = await client.get(jwks_url)
             response.raise_for_status()
             if len(response.content) > 65536:
                 raise ValueError('Oversized JWKS')
@@ -26,7 +26,7 @@ async def load_jwks(issuer):
     except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
         raise HTTPException(status_code=503, detail='Signing keys temporarily unavailable') from exc
     _cache.clear()  # One configured project per process; bound cache size.
-    _cache[issuer] = (now + 300, keys)
+    _cache[jwks_url] = (now + 300, keys)
     return keys
 
 

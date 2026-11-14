@@ -6,18 +6,19 @@ from datetime import datetime
 from uuid import UUID
 
 import dateparser
+from ..schemas import Category
 from pydantic import AwareDatetime, BaseModel, Field, field_validator
 
 
 class CreateTaskCall(BaseModel):
-    title: str = Field(min_length=1, max_length=120)
+    title: str = Field(min_length=1, max_length=120, pattern=r"\S")
     deadline_iso: Optional[AwareDatetime] = None
     deadline_phrase: Optional[str] = None
     effort_min: Optional[int] = Field(default=None, ge=5, le=600)
     importance: Optional[int] = Field(default=None, ge=1, le=5)
-    category: str = "other"
+    category: Category = Category.other
     depends_on: list[UUID] = Field(default_factory=list)
-    recurrence_rrule: Optional[str] = None
+    recurrence_rrule: Optional[str] = Field(default=None, max_length=512)
     confidence: str = "high"
     missing_fields: list[str] = Field(default_factory=list)
 

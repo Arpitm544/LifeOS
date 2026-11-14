@@ -7,8 +7,13 @@ do $$ begin
     create role lifeos_api nologin noinherit nosuperuser nocreatedb nocreaterole noreplication nobypassrls;
   end if;
   if exists (select 1 from pg_roles where rolname='lifeos_api' and
-      (rolsuper or rolbypassrls or rolcreaterole or rolcreatedb or rolcanlogin)) then
+      (rolsuper or rolbypassrls or rolcreaterole or rolcreatedb or rolcanlogin or rolreplication or rolinherit)) then
     raise exception 'Existing lifeos_api role is not sufficiently restricted';
+  end if;
+  if exists(select 1 from pg_auth_members where member = 'lifeos_api'::regrole)
+     or exists(select 1 from pg_shdepend where refobjid = 'lifeos_api'::regrole
+       and refclassid = 'pg_authid'::regclass and deptype in ('o','a')) then
+    raise exception 'Existing lifeos_api has memberships, ownership or explicit grants; provision a clean role';
   end if;
 end $$;
 grant usage on schema public, auth to lifeos_api;

@@ -19,6 +19,8 @@ def calculate_priority(*, now: datetime, deadline: Optional[datetime], effort_mi
                        free_working_hours: float) -> PriorityResult:
     if deadline is None:
         urgency = 0.0
+    elif deadline <= now:
+        urgency = 1.0
     else:
         slack = free_working_hours - effort_min / 60
         urgency = 1.0 if slack <= 0 else max(0.0, 1.0 - slack / 40)

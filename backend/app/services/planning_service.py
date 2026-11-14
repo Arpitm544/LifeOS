@@ -11,7 +11,7 @@ from sqlalchemy import delete, select
 from ..models import Conflict, Event, PlanBlock as StoredPlanBlock, Preference, Routine, Task, TaskDependency
 from .capacity_guard import CapacityTask, check_capacity
 from .priority_engine import calculate_priority
-from .scheduler import BusyBlock, SchedulableTask, build_free_slots, generate_plan
+from .scheduler import BusyBlock, SchedulableTask, build_free_slots, generate_plan, merge_slots
 from .recurrence import expand_routine
 
 
@@ -56,22 +56,41 @@ def calendar_slots(*, window_start: datetime, window_end: datetime, zone: ZoneIn
                     window_end=min(end, _utc(window_end)), working_hours=[(0, 24)],
                     busy=busy))
         day += timedelta(days=1)
-    return sorted(slots, key=lambda item: item.start)
+    return merge_slots(slots)
 
 
 async def busy_for_window(session, user_id: UUID, start: datetime, end: datetime, zone: ZoneInfo) -> list[BusyBlock]:
     events = list((await session.execute(select(Event).where(Event.user_id == user_id,
-        Event.cancelled == False, Event.start_at < end, Event.end_at > start))).scalars())
-    busy = [BusyBlock(_utc(event.start_at), _utc(event.end_at)) for event in events]
+        Event.cancelled == False, Event.start_at < end,
+        (Event.end_at > start) | Event.rrule.is_not(None)))).scalars())
+    from dateutil.rrule import rrulestr
+    busy = []
+    for event in events:
+        begin, finish = _utc(event.start_at), _utc(event.end_at)
+        if not event.rrule:
+            busy.append(BusyBlock(begin, finish))
+            continue
+        duration = finish - begin
+        try:
+            rule = rrulestr(event.rrule, dtstart=begin.astimezone(zone))
+        except (TypeError, ValueError) as exc:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=409, detail='Invalid recurring event; repair it before planning') from exc
+        for index, occurrence in enumerate(rule.xafter(start - duration, inc=True)):
+            if occurrence >= end:
+                break
+            if index >= 500:
+                from fastapi import HTTPException
+                raise HTTPException(status_code=409, detail='Too many recurring event instances')
+            busy.append(BusyBlock(_utc(occurrence), _utc(occurrence) + duration))
     routines = list((await session.execute(select(Routine).where(Routine.user_id == user_id))).scalars())
     for routine in routines:
         try:
             instances = expand_routine(routine.rrule, routine.start_time, routine.duration_min,
                 datetime.fromisoformat(routine.anchor_date).date(), start, end, str(zone), routine.overrides)
-        except (TypeError, ValueError):
-            # Invalid historical data must not make planning unsafe; it is surfaced
-            # by routine validation/editing instead of becoming free time.
-            continue
+        except (TypeError, ValueError) as exc:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=409, detail='Invalid routine data; repair it before planning') from exc
         busy.extend(BusyBlock(_utc(item['start_at']), _utc(item['end_at'])) for item in instances)
     return busy
 
@@ -84,6 +103,8 @@ def minutes_until(slots: list[BusyBlock], deadline: datetime) -> int:
 
 async def recalculate_priorities(session, user_id: UUID, now: datetime | None = None,
                                  horizon_days: int = 7) -> list[Task]:
+    from .domain_service import lock_owner
+    await lock_owner(session, user_id)
     now = _utc(now or datetime.now(timezone.utc))
     values = await active_preferences(session, user_id)
     zone, windows = planning_profile(values)
@@ -91,7 +112,7 @@ async def recalculate_priorities(session, user_id: UUID, now: datetime | None = 
     busy = await busy_for_window(session, user_id, now, end, zone)
     slots = calendar_slots(window_start=now, window_end=end, zone=zone, windows=windows, busy=busy)
     tasks = list((await session.execute(select(Task).where(Task.user_id == user_id,
-        Task.status.in_(['open', 'blocked'])).with_for_update())).scalars())
+        Task.status.in_(['open', 'blocked'])).order_by(Task.id))).scalars())
     dependencies = list((await session.execute(select(TaskDependency).where(
         TaskDependency.user_id == user_id))).scalars())
     dependent_counts = defaultdict(int)
@@ -113,6 +134,8 @@ async def rebuild_plan(session, user_id: UUID, *, now: datetime | None = None,
                        days: int = 7) -> dict:
     if not 1 <= days <= 14:
         raise ValueError('days must be between 1 and 14')
+    from .domain_service import lock_owner
+    await lock_owner(session, user_id)
     now = _utc(now or datetime.now(timezone.utc))
     end = now + timedelta(days=days)
     values = await active_preferences(session, user_id)

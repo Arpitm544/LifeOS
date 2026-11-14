@@ -3,7 +3,7 @@ from __future__ import annotations
 from pydantic import AwareDatetime, BaseModel, Field, field_validator, model_validator
 from typing import Literal, Optional
 from .services.preference_values import validate_preference
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 import re
 from dateutil.rrule import rrulestr
 
@@ -33,6 +33,7 @@ class RoutineCreate(BaseModel):
     start_time: str
     duration_min: int = Field(ge=5, le=600)
     movable: bool = True
+    anchor_date: Optional[date] = None
 
     @field_validator('start_time')
     @classmethod

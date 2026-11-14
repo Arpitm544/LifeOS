@@ -9,7 +9,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import Task
 from ..schemas import TaskCreate
-from .priority_engine import calculate_priority
 from .domain_service import audit, replace_dependencies
 
 
@@ -18,19 +17,19 @@ async def get_task(session: AsyncSession, user_id: UUID, task_id: UUID) -> Optio
 
 
 async def create_task(session: AsyncSession, user_id: UUID, payload: TaskCreate) -> Task:
+    from .domain_service import lock_owner
+    await lock_owner(session, user_id)
     now = datetime.now(timezone.utc)
     task = Task(user_id=user_id, title=payload.title, deadline_at=payload.deadline_at,
                 effort_est_min=payload.effort_est_min, importance=payload.importance,
                 category=payload.category.value, recurrence_rrule=payload.recurrence_rrule,
                 created_at=now)
-    result = calculate_priority(now=now, deadline=task.deadline_at, effort_min=task.effort_est_min,
-                                importance=task.importance, blocking_count=0,
-                                created_at=now, free_working_hours=40)
-    task.priority_score, task.priority_band = result.score, result.band
     session.add(task)
     await session.flush()
     if payload.depends_on:
         await replace_dependencies(session, user_id, task, payload.depends_on)
+    from .planning_service import recalculate_priorities
+    await recalculate_priorities(session, user_id, now)
     await audit(session, user_id, task, None, 'create')
     return task
 

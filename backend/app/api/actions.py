@@ -24,6 +24,8 @@ async def recent_actions(session: AsyncSession = Depends(get_session), user_id: 
 
 @router.post('/batches/{batch_id}/undo')
 async def undo_batch(batch_id: UUID, session: AsyncSession = Depends(get_session), user_id: UUID = Depends(current_user_id)):
+    from ..services.domain_service import lock_owner
+    await lock_owner(session, user_id)
     rows = (await session.execute(select(ActionLog).where(ActionLog.user_id == user_id,
         ActionLog.batch_id == batch_id).order_by(ActionLog.created_at.desc()).with_for_update())).scalars().all()
     if not rows:

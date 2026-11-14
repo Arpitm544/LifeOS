@@ -14,6 +14,15 @@ from ..db import get_session
 from ..models import Event, PlanBlock, Task
 from ..schemas_plan_blocks import PlanBlockCreate, PlanBlockPatch
 
+from ..services.domain_service import lock_owner
+from ..services.planning_service import active_preferences, planning_profile
+
+
+async def local_plan_date(session, owner, start):
+    zone, _ = planning_profile(await active_preferences(session, owner))
+    return start.astimezone(zone).replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+
+
 router = APIRouter(prefix="/api/plan-blocks", tags=["planning"])
 
 
@@ -31,6 +40,7 @@ async def list_blocks(plan_date: Optional[datetime] = None, session: AsyncSessio
 
 
 async def validate_placement(session, user_id, task_id, start, end, exclude_id=None):
+    await lock_owner(session, user_id)
     if start.tzinfo is None or end.tzinfo is None or end <= start:
         raise HTTPException(status_code=422, detail="Use timezone-aware start/end with end after start")
     task = (await session.execute(select(Task).where(Task.id == task_id, Task.user_id == user_id)
@@ -58,7 +68,7 @@ async def validate_placement(session, user_id, task_id, start, end, exclude_id=N
 async def create_block(payload: PlanBlockCreate, session: AsyncSession = Depends(get_session), user_id: UUID = Depends(current_user_id)) -> dict:
     await validate_placement(session, user_id, payload.task_id, payload.start_at, payload.end_at)
     block = PlanBlock(user_id=user_id, task_id=payload.task_id, start_at=payload.start_at,
-                      end_at=payload.end_at, plan_date=payload.start_at.astimezone(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0))
+                      end_at=payload.end_at, plan_date=await local_plan_date(session, user_id, payload.start_at))
     session.add(block)
     await session.commit()
     await session.refresh(block)
@@ -67,16 +77,20 @@ async def create_block(payload: PlanBlockCreate, session: AsyncSession = Depends
 
 @router.patch("/{block_id}")
 async def patch_block(block_id: UUID, payload: PlanBlockPatch, session: AsyncSession = Depends(get_session), user_id: UUID = Depends(current_user_id)) -> dict:
+    await lock_owner(session, user_id)
     block = (await session.execute(select(PlanBlock).where(PlanBlock.id == block_id, PlanBlock.user_id == user_id))).scalar_one_or_none()
     if block is None:
         raise HTTPException(status_code=404, detail="Plan block not found")
     changes = payload.model_dump(exclude_unset=True)
     if any(value is None for value in changes.values()):
         raise HTTPException(status_code=422, detail="Plan block fields cannot be null")
-    await validate_placement(session, user_id, block.task_id, changes.get('start_at', block.start_at),
-                             changes.get('end_at', block.end_at), block.id)
+    if {'start_at', 'end_at'} & changes.keys() or changes.get('status') == 'planned':
+        await validate_placement(session, user_id, block.task_id, changes.get('start_at', block.start_at),
+                                 changes.get('end_at', block.end_at), block.id)
     for key, value in changes.items():
         setattr(block, key, value)
+    if 'start_at' in changes:
+        block.plan_date = await local_plan_date(session, user_id, block.start_at)
     if block.end_at <= block.start_at:
         raise HTTPException(status_code=422, detail="end_at must be after start_at")
     await session.commit()

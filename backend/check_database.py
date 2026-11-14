@@ -1,25 +1,24 @@
 """Read-only database connection test; never print credentials."""
 import asyncio
 import ssl
-from pathlib import Path
 
 import asyncpg
 from app.database_tls import database_ssl_context
-from dotenv import dotenv_values
+from app.config import get_settings
 
 
 async def main():
-    values = dotenv_values(Path(__file__).parent / ".env")
-    url = values.get("DATABASE_URL", "").replace("postgresql+asyncpg://", "postgresql://", 1)
+    settings = get_settings()
+    url = settings.database_url.replace("postgresql+asyncpg://", "postgresql://", 1)
     if not url:
         print("DATABASE_URL is missing from backend/.env")
         return 1
     try:
-        context = database_ssl_context()
+        context = database_ssl_context() if settings.database_ssl else False
         connection = await asyncpg.connect(url, ssl=context, timeout=15)
         try:
             await connection.fetchval("SELECT 1")
-            print("SUCCESS: database connected over verified TLS.")
+            print("SUCCESS: database connected" + (" over verified TLS." if settings.database_ssl else " (TLS explicitly disabled)."))
         finally:
             await connection.close()
         return 0

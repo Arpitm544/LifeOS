@@ -59,20 +59,31 @@ async def sync_reminders(session, owner, row):
         return
     deadline = deadline.replace(tzinfo=timezone.utc) if deadline.tzinfo is None else deadline
     times = task_reminder_times(deadline=deadline, effort_min=row.effort_est_min, now=now) if kind == 'task' else [('event', event_reminder_time(start=deadline, location=row.location))]
+    scheduled = set()
     for reminder_kind, fire_at in times:
         fire_at = move_out_of_quiet_hours(fire_at.astimezone(tz),
             quiet_start=tuple(map(int, quiet['start'].split(':'))),
             quiet_end=tuple(map(int, quiet['end'].split(':'))), deadline=deadline.astimezone(tz))
-        if fire_at < now:
+        if fire_at < now or fire_at in scheduled:
             continue
+        scheduled.add(fire_at)
         session.add(Reminder(user_id=owner, item_type=kind, item_id=row.id, kind=reminder_kind,
             fire_at=fire_at.astimezone(timezone.utc), status='pending', message=row.title))
 
 
-async def lock_tasks(session, owner):
-    # A stable lock order serializes dependency changes and avoids cross-task cycles.
-    return list((await session.execute(select(Task).where(Task.user_id == owner)
-        .order_by(Task.id).with_for_update())).scalars())
+async def lock_owner(session, owner):
+    if session.get_bind().dialect.name == 'postgresql':
+        from sqlalchemy import text
+        await session.execute(text('SELECT pg_advisory_xact_lock(7301, hashtext(:owner))'),
+                              {'owner': str(owner)})
+
+
+async def lock_tasks(session, owner, ids=None):
+    await lock_owner(session, owner)
+    query = select(Task).where(Task.user_id == owner)
+    if ids is not None:
+        query = query.where(Task.id.in_(ids))
+    return list((await session.execute(query.order_by(Task.id).with_for_update())).scalars())
 
 
 def assert_acyclic(edges):
@@ -120,6 +131,7 @@ async def refresh_blocked(session, owner):
 
 
 async def undo_logged_action(session, owner, action_id):
+    await lock_owner(session, owner)
     log = (await session.execute(select(ActionLog).where(ActionLog.id == action_id,
         ActionLog.user_id == owner).with_for_update())).scalar_one_or_none()
     if log is None:
@@ -138,7 +150,7 @@ async def undo_logged_action(session, owner, action_id):
         log.undone_at = datetime.now(timezone.utc)
         await session.flush()
         return True
-    model = {'task': Task, 'tasks': Task, 'events': Event, 'preferences': Preference, 'routines': Routine}.get(log.entity)
+    model = {'task': Task, 'tasks': Task, 'events': Event, 'preferences': Preference, 'routines': Routine, 'plan_blocks': PlanBlock}.get(log.entity)
     if model is None:
         raise HTTPException(status_code=409, detail='This action cannot be undone')
     row = (await session.execute(select(model).where(model.id == log.entity_id,
@@ -151,6 +163,12 @@ async def undo_logged_action(session, owner, action_id):
                 values[column.name] = datetime.fromisoformat(value)
             elif value is not None and str(column.type) == 'UUID':
                 values[column.name] = UUID(value)
+        if model is PlanBlock:
+            start, end = values['start_at'], values['end_at']
+            overlap = select(PlanBlock.id).where(PlanBlock.user_id == owner,
+                PlanBlock.status == 'planned', PlanBlock.start_at < end, PlanBlock.end_at > start)
+            if (await session.execute(overlap)).first():
+                raise HTTPException(status_code=409, detail='Restored block would overlap planned work')
         session.add(model(**values))
         log.undone_at = datetime.now(timezone.utc)
         await session.flush()

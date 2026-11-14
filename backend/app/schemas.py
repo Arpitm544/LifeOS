@@ -18,13 +18,13 @@ class Category(str, Enum):
     other = "other"
 
 class TaskCreate(BaseModel):
-    title: str = Field(min_length=1, max_length=120)
+    title: str = Field(min_length=1, max_length=120, pattern=r"\S")
     deadline_at: Optional[AwareDatetime] = None
     effort_est_min: int = Field(default=30, ge=5, le=600)
     importance: int = Field(default=3, ge=1, le=5)
     category: Category = Category.other
     depends_on: list[UUID] = Field(default_factory=list)
-    recurrence_rrule: Optional[str] = None
+    recurrence_rrule: Optional[str] = Field(default=None, max_length=512)
 
 class TaskRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -41,7 +41,7 @@ class TaskRead(BaseModel):
 
 class TaskPatch(BaseModel):
     model_config = ConfigDict(extra='forbid')
-    title: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    title: Optional[str] = Field(default=None, min_length=1, max_length=120, pattern=r"\S")
     deadline_at: Optional[AwareDatetime] = None
     effort_est_min: Optional[int] = Field(default=None, ge=5, le=600)
     importance: Optional[int] = Field(default=None, ge=1, le=5)

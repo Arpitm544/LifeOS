@@ -35,8 +35,14 @@ def compute_insights(*, completed: list[CompletedTask], planned_blocks: int,
         by_hour[item.completed_hour].append(1)
     factors = {category: round(max(0.5, min(3.0, median(values[-20:]))), 2)
                if len(completed) >= 10 else 1.0 for category, values in by_category.items()}
-    productive_hours = sorted(by_hour, key=lambda hour: len(by_hour[hour]), reverse=True)
-    windows = [(hour, hour + 2) for hour in productive_hours[:2]]
+    productive_hours = sorted(range(23),
+        key=lambda hour: -(len(by_hour[hour]) + len(by_hour[hour + 1])))
+    windows = []
+    for hour in productive_hours:
+        if (by_hour[hour] or by_hour[hour + 1]) and all(hour + 2 <= a or hour >= b for a, b in windows):
+            windows.append((hour, hour + 2))
+            if len(windows) == 2:
+                break
     overdue_rates = {category: round(count / max(total, 1), 2) for category, (count, total) in overdue_by_category.items()}
     snooze_rates = {category: round(count / max(total, 1), 2) for category, (count, total) in snoozes_by_category.items()}
     return ActivitySummary(factors, windows, round(completed_blocks / max(planned_blocks, 1), 2), overdue_rates, snooze_rates, len(completed) < 10)

@@ -42,7 +42,7 @@ CLERK_AUTHORIZED_PARTIES=http://localhost:3000
 ## Migration and release sequence
 
 1. Back up any non-fixture database data.
-2. Apply migrations `001` through `005` in order. For an existing Supabase-auth UUID dataset, decide how legacy IDs map to Clerk IDs before applying `005`; it deliberately does not invent identity mappings.
+2. For a fresh Supabase-compatible database, apply migrations `001` through `006` in order. For an existing database, apply only unapplied migrations according to `backend/migrations/README.md`; never rerun `001`. For an existing Supabase-auth UUID dataset, decide how legacy IDs map to Clerk IDs before applying `005`; it deliberately does not invent identity mappings.
 3. Run the opt-in PostgreSQL/RLS test with a disposable or approved test database.
 4. Configure the API service with a non-admin database role that can assume `lifeos_api`.
 5. Send a Clerk session token in `Authorization: Bearer <token>` from the frontend.

@@ -10,9 +10,9 @@ class EventCreate(BaseModel):
     title: str = Field(min_length=1, max_length=120)
     start_at: AwareDatetime
     end_at: AwareDatetime
-    location: Optional[str] = None
-    rrule: Optional[str] = None
-    source: str = "manual"
+    location: Optional[str] = Field(default=None, max_length=200)
+    rrule: Optional[str] = Field(default=None, max_length=512)
+    source: str = Field(default="manual", max_length=16)
 
     @model_validator(mode="after")
     def valid_range(self):
@@ -30,6 +30,6 @@ class EventPatch(BaseModel):
     title: Optional[str] = Field(default=None, min_length=1, max_length=120)
     start_at: Optional[AwareDatetime] = None
     end_at: Optional[AwareDatetime] = None
-    location: Optional[str] = None
-    rrule: Optional[str] = None
+    location: Optional[str] = Field(default=None, max_length=200)
+    rrule: Optional[str] = Field(default=None, max_length=512)
 

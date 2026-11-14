@@ -113,7 +113,7 @@ class Routine(Base):
     start_time: Mapped[str] = mapped_column(String(8))
     duration_min: Mapped[int] = mapped_column(Integer)
     movable: Mapped[bool] = mapped_column(Boolean, default=True)
-    anchor_date: Mapped[str] = mapped_column(String(10), default='2026-01-01')
+    anchor_date: Mapped[str] = mapped_column(String(10), default=lambda: datetime.utcnow().date().isoformat())
     overrides: Mapped[dict] = mapped_column(JSONB, default=dict)
 
 class PlanBlock(Base):

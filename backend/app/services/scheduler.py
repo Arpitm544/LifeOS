@@ -26,6 +26,18 @@ class PlanBlock:
     end: datetime
 
 
+def merge_slots(slots: list[BusyBlock]) -> list[BusyBlock]:
+    merged = []
+    for slot in sorted(slots, key=lambda item: item.start):
+        if slot.end <= slot.start:
+            continue
+        if merged and slot.start <= merged[-1].end:
+            merged[-1] = BusyBlock(merged[-1].start, max(merged[-1].end, slot.end))
+        else:
+            merged.append(slot)
+    return merged
+
+
 def build_free_slots(*, window_start: datetime, window_end: datetime,
                      working_hours: list[tuple[int, int]], busy: list[BusyBlock],
                      buffer_min: int = 10, minimum_slot_min: int = 25) -> list[BusyBlock]:
@@ -55,15 +67,17 @@ def build_free_slots(*, window_start: datetime, window_end: datetime,
                 fragments = next_fragments
             slots.extend(fragment for fragment in fragments if (fragment.end - fragment.start).total_seconds() >= minimum_slot_min * 60)
         cursor_day += timedelta(days=1)
-    return sorted(slots, key=lambda slot: slot.start)
+    return merge_slots(slots)
 
 
 def generate_plan(*, tasks: list[SchedulableTask], slots: list[BusyBlock], chunk_min: int = 90) -> tuple[list[PlanBlock], list[SchedulableTask]]:
+    if len({task.id for task in tasks}) != len(tasks):
+        raise ValueError('Task IDs must be unique')
     remaining = {task.id: task.effort_min for task in tasks if not task.blocked}
     ordered = sorted((task for task in tasks if not task.blocked), key=lambda task: (-task.priority_score, task.deadline))
     blocks: list[PlanBlock] = []
     # Consume one shared free-slot list across all tasks.
-    available_slots = list(slots)
+    available_slots = merge_slots(slots)
     for task in ordered:
         next_slots = []
         for slot in available_slots:

@@ -24,7 +24,7 @@ def expand_routine(rule, start_time, duration_min, anchor, window_start, window_
         if change.get('cancelled'):
             continue
         begin = datetime.fromisoformat(change['start_at']) if change.get('start_at') else start
-        end = begin + timedelta(minutes=change.get('duration_min', duration_min))
+        end = begin.astimezone(timezone.utc) + timedelta(minutes=change.get('duration_min', duration_min))
         output.append({'original_start': key, 'start_at': begin.astimezone(timezone.utc),
                        'end_at': end.astimezone(timezone.utc)})
     return output

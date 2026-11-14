@@ -23,6 +23,8 @@ async def claim_due_reminders(session: AsyncSession, *, batch_size: int = 100) -
 
 
 async def apply_reminder_action(session: AsyncSession, *, user_id: UUID, reminder_id: UUID, action: str) -> Optional[Reminder]:
+    from .domain_service import lock_owner, snapshot, audit, refresh_blocked
+    await lock_owner(session, user_id)
     reminder = (await session.execute(select(Reminder).where(Reminder.id == reminder_id, Reminder.user_id == user_id).with_for_update())).scalar_one_or_none()
     if reminder is None:
         return None
@@ -37,8 +39,11 @@ async def apply_reminder_action(session: AsyncSession, *, user_id: UUID, reminde
         if reminder.item_type != 'task' or task is None:
             from fastapi import HTTPException
             raise HTTPException(status_code=409, detail='Reminder has no completable task')
+        before = snapshot(task)
         task.status = 'done'
         task.completed_at = datetime.now(timezone.utc)
+        await audit(session, user_id, task, before, 'complete')
+        await refresh_blocked(session, user_id)
         await session.execute(update(Reminder).where(Reminder.user_id == user_id,
             Reminder.item_id == task.id, Reminder.status == 'pending', Reminder.id != reminder.id)
             .values(status='cancelled'))

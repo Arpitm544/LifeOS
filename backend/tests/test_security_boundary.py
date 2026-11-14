@@ -61,11 +61,19 @@ def test_required_claims(monkeypatch, missing):
 
 def test_rs256_signature_and_unknown_key_rejection(monkeypatch):
     token, key = signed_token()
-    async def keys(url):
-        assert url == ISSUER + '/.well-known/jwks.json'
-        return [key]
-    monkeypatch.setattr(jwt_verifier, 'load_jwks', keys)
+    import httpx
+    real_client = httpx.AsyncClient
+    def handler(request):
+        assert str(request.url) == ISSUER + '/.well-known/jwks.json'
+        return httpx.Response(200, json={'keys': [key]})
+    jwt_verifier._cache.clear()
+    monkeypatch.setattr(httpx, 'AsyncClient', lambda **kwargs:
+        real_client(transport=httpx.MockTransport(handler), **kwargs))
     assert asyncio.run(jwt_verifier.verify_token(token, settings())) == OWNER
+    forged, _ = signed_token()  # Same kid, different signing key.
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(jwt_verifier.verify_token(forged, settings()))
+    assert exc.value.status_code == 401
     unknown, _ = signed_token(kid='unknown')
     with pytest.raises(HTTPException):
         asyncio.run(jwt_verifier.verify_token(unknown, settings()))

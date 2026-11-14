@@ -45,6 +45,8 @@ async def move_instance(routine_id: UUID, payload: RoutineInstanceEdit, tz: str=
     row = (await session.execute(select(Routine).where(Routine.id == routine_id, Routine.user_id == user_id).with_for_update())).scalar_one_or_none()
     if row is None:
         raise HTTPException(status_code=404, detail='Routine not found')
+    if not row.movable:
+        raise HTTPException(status_code=409, detail='Routine is not movable')
     from datetime import timedelta
     try:
         candidates = expand_routine(row.rrule, row.start_time, row.duration_min,
@@ -119,18 +121,22 @@ async def delete_preference(preference_id: UUID, confirmed: bool=False, session:
 @router.get("/routines")
 async def list_routines(session: AsyncSession = Depends(get_session), user_id: UUID = Depends(current_user_id)) -> list[dict]:
     rows = (await session.execute(select(Routine).where(Routine.user_id == user_id).order_by(Routine.start_time))).scalars().all()
-    return [{"id": str(row.id), "title": row.title, "rrule": row.rrule, "start_time": row.start_time, "duration_min": row.duration_min, "movable": row.movable} for row in rows]
+    return [{"id": str(row.id), "title": row.title, "rrule": row.rrule, "start_time": row.start_time, "duration_min": row.duration_min, "movable": row.movable, "anchor_date": row.anchor_date} for row in rows]
 
 
 @router.post("/routines", status_code=status.HTTP_201_CREATED)
 async def create_routine(payload: RoutineCreate, session: AsyncSession = Depends(get_session), user_id: UUID = Depends(current_user_id)) -> dict:
-    row = Routine(user_id=user_id, **payload.model_dump())
+    from ..services.planning_service import active_preferences, planning_profile
+    zone, _ = planning_profile(await active_preferences(session, user_id))
+    values = payload.model_dump(exclude={'anchor_date'})
+    anchor = payload.anchor_date or datetime.now(zone).date()
+    row = Routine(user_id=user_id, anchor_date=anchor.isoformat(), **values)
     session.add(row)
     await session.flush()
     await audit(session, user_id, row, None, 'create')
     await session.commit()
     await session.refresh(row)
-    return {"id": str(row.id), "title": row.title, "rrule": row.rrule, "start_time": row.start_time, "duration_min": row.duration_min, "movable": row.movable}
+    return {"id": str(row.id), "title": row.title, "rrule": row.rrule, "start_time": row.start_time, "duration_min": row.duration_min, "movable": row.movable, "anchor_date": row.anchor_date}
 
 
 @router.put('/routines/{routine_id}')
@@ -141,8 +147,10 @@ async def replace_routine(routine_id: UUID, payload: RoutineCreate,
     if row is None:
         raise HTTPException(status_code=404, detail='Routine not found')
     before = snapshot(row)
-    for key, value in payload.model_dump().items():
+    for key, value in payload.model_dump(exclude={'anchor_date'}).items():
         setattr(row, key, value)
+    if payload.anchor_date is not None:
+        row.anchor_date = payload.anchor_date.isoformat()
     row.overrides = {}
     action = await audit(session, user_id, row, before, 'update')
     await session.commit()

@@ -10,6 +10,8 @@ def parse_quick_add(text: str, *, now: datetime, timezone: str) -> dict:
     title = text[:match.start()].strip(" .") or text.strip()
     phrase = match.group(1).strip(" .")
     parsed = dateparser.parse(phrase, settings={"RELATIVE_BASE": now, "TIMEZONE": timezone, "RETURN_AS_TIMEZONE_AWARE": True})
+    if parsed is not None and parsed < now:
+        raise ValueError('That deadline is in the past. What future date should I use?')
     return {"title": title[:120] if parsed else text.strip()[:120], "deadline_at": parsed,
             "deadline_phrase": phrase, "category": "other"}
 

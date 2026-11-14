@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from pydantic import BaseModel
+from pydantic import AwareDatetime, BaseModel, Field
 
 
 class ReminderAction(str, Enum):
@@ -17,7 +17,7 @@ class ReminderActionRequest(BaseModel):
 
 
 class ReminderPreviewRequest(BaseModel):
-    deadline: datetime
-    effort_min: int
-    now: datetime
+    deadline: AwareDatetime
+    effort_min: int = Field(ge=5, le=600)
+    now: AwareDatetime
 

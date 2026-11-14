@@ -16,6 +16,8 @@ from ..services.task_service import create_task, get_task
 from ..services.domain_service import audit, snapshot, refresh_blocked, lock_tasks, replace_dependencies
 from pydantic import BaseModel, Field
 
+from ..services.planning_service import recalculate_priorities
+
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 
 
@@ -33,6 +35,7 @@ async def set_dependencies(task_id: UUID, payload: DependenciesUpdate,
     prior = list((await session.execute(select(TaskDependency.depends_on_task_id).where(
         TaskDependency.user_id == user_id, TaskDependency.task_id == task_id))).scalars())
     await replace_dependencies(session, user_id, task, payload.depends_on)
+    await recalculate_priorities(session, user_id)
     session.add(ActionLog(user_id=user_id, entity='task_dependencies', entity_id=task_id,
         action_type='update', before={'depends_on': sorted(map(str,prior))},
         after={'depends_on': sorted(map(str,set(payload.depends_on)))}))
@@ -44,6 +47,7 @@ async def set_dependencies(task_id: UUID, payload: DependenciesUpdate,
 @router.patch('/{task_id}', response_model=TaskRead)
 async def edit_task(task_id: UUID, payload: TaskPatch, session: AsyncSession = Depends(get_session),
                     user_id: UUID = Depends(current_user_id)):
+    await lock_tasks(session, user_id)
     task = (await session.execute(select(Task).where(Task.id == task_id,
         Task.user_id == user_id).with_for_update())).scalar_one_or_none()
     if task is None:
@@ -54,6 +58,8 @@ async def edit_task(task_id: UUID, payload: TaskPatch, session: AsyncSession = D
     before = snapshot(task)
     for key in changes:
         setattr(task, key, getattr(payload, key))
+    if changes.keys() & {'deadline_at', 'effort_est_min', 'importance'}:
+        await recalculate_priorities(session, user_id)
     await audit(session, user_id, task, before, 'update')
     await session.commit()
     await session.refresh(task)
@@ -110,12 +116,24 @@ async def complete_task(task_id: UUID, actual_effort_min: Optional[int] = Query(
 async def delete_task(task_id: UUID, confirmed: bool = False, session: AsyncSession = Depends(get_session), user_id: UUID = Depends(current_user_id)) -> None:
     if not confirmed:
         raise HTTPException(status_code=409, detail='Explicit confirmation required: confirmed=true')
+    await lock_tasks(session, user_id)
     task = await get_task(session, user_id, task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
     before = snapshot(task)
     task.status = 'dropped'
-    await audit(session, user_id, task, before, 'delete')
+    from ..models import PlanBlock
+    from uuid import uuid4
+    batch_id = uuid4()
+    blocks = (await session.execute(select(PlanBlock).where(PlanBlock.user_id == user_id,
+        PlanBlock.task_id == task.id, PlanBlock.status == 'planned',
+        PlanBlock.end_at > datetime.now(timezone.utc)).order_by(PlanBlock.id).with_for_update())).scalars().all()
+    for block in blocks:
+        block_before = snapshot(block)
+        log = await audit(session, user_id, block, block_before, 'delete')
+        log.batch_id, log.after = batch_id, None
+        await session.delete(block)
+    (await audit(session, user_id, task, before, 'delete')).batch_id = batch_id
     await refresh_blocked(session, user_id)
     await session.commit()
 

@@ -22,7 +22,7 @@ def apply_user_context(session, transaction, connection):
 event.listen(Session, 'after_begin', apply_user_context)
 
 engine = create_async_engine(get_settings().database_url, pool_pre_ping=True,
-                             connect_args={"ssl": database_ssl_context()})
+                             connect_args={"ssl": database_ssl_context()} if get_settings().database_ssl else {"ssl": False})
 SessionFactory = async_sessionmaker(engine, expire_on_commit=False)
 
 async def get_session(user_id=Depends(current_user_id)) -> AsyncGenerator[AsyncSession, None]:
@@ -31,8 +31,7 @@ async def get_session(user_id=Depends(current_user_id)) -> AsyncGenerator[AsyncS
         session.info['user_id'] = user_id
         # Clerk owns identity. LifeOS keeps a minimal local row for tenant FKs;
         # profile synchronization can enrich it later without trusting client data.
-        if await session.get(User, user_id) is None:
-            session.add(User(id=user_id))
-            await session.flush()
+        from sqlalchemy.dialects.postgresql import insert
+        await session.execute(insert(User).values(id=user_id).on_conflict_do_nothing(index_elements=['id']))
         yield session
 

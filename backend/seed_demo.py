@@ -5,28 +5,29 @@ import argparse
 import asyncio
 import json
 from datetime import date, datetime, time, timedelta, timezone
-from uuid import UUID, uuid5
+from uuid import UUID, NAMESPACE_URL, uuid5
 from zoneinfo import ZoneInfo
 
 MARKER = "lifeos-demo-v1"
 
 
-def build_demo(user_id: UUID, anchor: date, tz_name: str = "Asia/Kolkata") -> dict:
+def build_demo(user_id: str, anchor: date, tz_name: str = "Asia/Kolkata") -> dict:
     tz = ZoneInfo(tz_name)
+    namespace = uuid5(NAMESPACE_URL, str(user_id))
     rows = {name: [] for name in ("tasks", "events", "preferences", "routines", "plan_blocks", "activity_events", "reminders")}
 
     def row_id(label: str) -> UUID:
-        return uuid5(user_id, f"{MARKER}:{anchor}:{label}")
+        return uuid5(namespace, f"{MARKER}:{anchor}:{label}")
 
     def at(day: date, hour: int, minute: int = 0) -> datetime:
         return datetime.combine(day, time(hour, minute), tzinfo=tz).astimezone(timezone.utc)
 
     def add(table: str, label: str, **values) -> UUID:
         identity = row_id(label)
-        rows[table].append(dict(id=identity, user_id=user_id, **values))
+        rows[table].append(dict(id=identity, user_id=str(user_id), **values))
         return identity
 
-    # Fixed future instances make the calendar usable before RRULE expansion is wired.
+    # Fixed instances label the demo calendar independently of routines.
     for offset in range(7):
         day = anchor + timedelta(days=offset)
         if day.weekday() < 5:
@@ -34,7 +35,7 @@ def build_demo(user_id: UUID, anchor: date, tz_name: str = "Asia/Kolkata") -> di
         if day.weekday() in (1, 3):
             add("events", f"shift:{day}", title="[Demo] Café shift", start_at=at(day, 17), end_at=at(day, 21), source="manual", external_id=MARKER)
 
-    add("routines", "gym", title="[Demo] Gym", rrule="FREQ=WEEKLY;BYDAY=MO,WE,FR", start_time="07:00", duration_min=60, movable=True)
+    add("routines", "gym", title="[Demo] Gym", rrule="FREQ=WEEKLY;BYDAY=MO,WE,FR", start_time="07:00", duration_min=60, movable=True, anchor_date=anchor.isoformat())
     settings = {
         "timezone": {"name": tz_name},
         "work_hours": {"start": "09:00", "end": "18:00"},
@@ -77,7 +78,7 @@ def build_demo(user_id: UUID, anchor: date, tz_name: str = "Asia/Kolkata") -> di
 async def load_demo(rows: dict) -> dict[str, int]:
     from sqlalchemy import select
     from app.db import SessionFactory, engine
-    from app.models import ActivityEvent, Event, PlanBlock, Preference, Reminder, Routine, Task
+    from app.models import User, ActivityEvent, Event, PlanBlock, Preference, Reminder, Routine, Task
 
     models = {"tasks": Task, "events": Event, "preferences": Preference, "routines": Routine,
               "plan_blocks": PlanBlock, "activity_events": ActivityEvent, "reminders": Reminder}
@@ -88,6 +89,8 @@ async def load_demo(rows: dict) -> dict[str, int]:
             from sqlalchemy import text
             owner = next(iter(rows["preferences"]))["user_id"]
             await session.execute(text("SELECT pg_advisory_xact_lock(hashtext(:owner))"), {"owner": str(owner)})
+            from sqlalchemy.dialects.postgresql import insert
+            await session.execute(insert(User).values(id=owner).on_conflict_do_nothing(index_elements=['id']))
             for table, fixtures in rows.items():
                 model = models[table]
                 for values in fixtures:
@@ -111,7 +114,7 @@ async def load_demo(rows: dict) -> dict[str, int]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Seed an existing dedicated demo user's database rows.")
-    parser.add_argument("--user-id", required=True, type=UUID, help="Existing demo account UUID")
+    parser.add_argument("--user-id", required=True, type=str, help="Existing demo Clerk subject (user_...)")
     parser.add_argument("--date", type=date.fromisoformat, help="Local reference day (YYYY-MM-DD)")
     parser.add_argument("--timezone", default="Asia/Kolkata")
     parser.add_argument("--dry-run", action="store_true", help="Print fixtures without connecting to the database")

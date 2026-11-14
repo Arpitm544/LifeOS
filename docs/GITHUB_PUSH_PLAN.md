@@ -17,7 +17,7 @@ Publish the audited local LifeOS backend to the existing GitHub branch **`Backen
 | # | Commit | Contents | Verification before commit |
 | --- | --- | --- | --- |
 | 1 | `chore(backend): import reproducible FastAPI scaffold` | Project metadata, dependency constraints, application entry point, configuration, `.gitignore`, `.env.example`, health endpoint. | Dependency install, `pip check`, app imports. |
-| 2 | `feat(db): add LifeOS domain schema and additive migrations` | ORM models plus migrations `001`–`004`; migration/readme documentation. | Fresh schema SQL review; migration ordering verified. |
+| 2 | `feat(db): add LifeOS domain schema and additive migrations` | ORM models plus migrations `001`–`006`, including the Clerk identity cutover and shared rate-limit storage; migration/readme documentation. | Fresh and 004→005→006 upgrade tests with explicit Clerk mapping; migration ordering verified. |
 | 3 | `feat(auth): verify Clerk JWTs and scoped database sessions` | Clerk RS256/JWKS verifier, TLS configuration, database role/context integration and safe auth defaults. | Invalid issuer/audience/authorized-party/expiry/token tests; no secrets in staged diff. |
 | 4 | `test(security): cover tenant isolation and database acceptance gates` | JWT boundary tests and opt-in PostgreSQL/RLS test suite. | Local security tests pass; live tests remain explicitly opt-in until run. |
 | 5 | `feat(tasks): add validated task and event lifecycle APIs` | Task/event schemas, create/read/edit/complete/cancel/delete flows, filters and ownership checks. | Task/event API and validation tests. |
