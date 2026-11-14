@@ -67,6 +67,11 @@ class Outcome:
     wrote: bool = False
     planned: bool = False
     last_touched: Optional[UUID] = None
+    # What the agent did, in order, for the "How LifeOS handled this" panel.
+    steps: list[dict] = field(default_factory=list)
+
+    def step(self, kind: str, label: str, status: str = 'done', detail: str = '', **extra) -> None:
+        self.steps.append({'kind': kind, 'label': label, 'status': status, 'detail': detail[:200], **extra})
 
     def clarify(self, question: str, options: Optional[list[str]] = None) -> None:
         # At most one clarification per message (PRD F1.4).
@@ -138,10 +143,12 @@ async def handle_chat(session, *, user_id, text: str, client_tz: str,
     response: Optional[LLMResponse] = None
 
     if ctx.pending and YES.match(text):
+        outcome.step('confirm', 'You confirmed the held changes', detail='Running them now.')
         await execute_calls(session, user_id, ctx, [ToolCall(**call) for call in ctx.pending['calls']],
                             outcome, confirmed=True)
         reply = 'Done.' if outcome.actions else 'Nothing changed.'
     elif ctx.pending and NO.match(text):
+        outcome.step('confirm', 'You declined the held changes', 'skipped', 'Nothing was changed.')
         reply = 'Okay, I left everything as it was.'
     else:
         client = llm if llm is not None else configured_llm()
@@ -151,12 +158,20 @@ async def handle_chat(session, *, user_id, text: str, client_tz: str,
             events = list((await session.execute(select(Event).where(Event.user_id == user_id,
                 Event.cancelled == False, Event.start_at < day_start + timedelta(days=1),
                 Event.end_at > day_start).order_by(Event.start_at))).scalars())
+            outcome.step('context', 'Read your workspace', 'done',
+                         f"{len(ctx.open_tasks)} open task{'s' if len(ctx.open_tasks) != 1 else ''}, "
+                         f"{len(events)} event{'s' if len(events) != 1 else ''} today, your working hours"
+                         + (f', reply in {language}' if language else ''))
             try:
                 response = await client.parse(text=text, context=llm_context(ctx, text, events, language), history=ctx.history)
             except (LLMUnavailable, httpx.HTTPError, TimeoutError, OSError, ValueError, KeyError, TypeError):
                 fallback = True
         if fallback:
-            return await quick_add_reply(session, user_id, text, ctx, started)
+            return await quick_add_reply(session, user_id, text, ctx, started, outcome.steps)
+        count = len(response.tool_calls)
+        outcome.step('understand', 'Understood your message', 'done',
+                     (f"Planned {count} step{'s' if count != 1 else ''}" if count else 'No changes needed, just a reply')
+                     + (f' with {response.model}' if response.model else ''), ms=response.latency_ms)
         await execute_calls(session, user_id, ctx, response.tool_calls, outcome)
         reply = response.reply or ('Done.' if outcome.wrote else '')
 
@@ -167,6 +182,9 @@ async def handle_chat(session, *, user_id, text: str, client_tz: str,
         from ..models import Conflict
         conflicts = list((await session.execute(select(Conflict).where(Conflict.user_id == user_id,
             Conflict.status == 'open').order_by(Conflict.deadline_at))).scalars())
+    if outcome.wrote:
+        outcome.step('check', 'Checked your deadlines still fit', 'warning' if conflicts else 'done',
+                     f"{len(conflicts)} deadline{'s' if len(conflicts) != 1 else ''} at risk" if conflicts else 'All deadlines fit')
     reply_parts = [part for part in [reply, *outcome.replies] if part]
     if outcome.clarification and not outcome.actions:
         reply_parts = [outcome.clarification['question']]
@@ -181,7 +199,7 @@ async def handle_chat(session, *, user_id, text: str, client_tz: str,
     return {'message_id': str(message_id), 'reply': final_reply, 'actions': outcome.actions,
             'conflicts': [conflict_card(row) for row in conflicts],
             'clarification': outcome.clarification, 'confirmation': outcome.confirmation,
-            'fallback': False}
+            'fallback': False, 'steps': outcome.steps}
 
 
 def conflict_card(row) -> dict:
@@ -197,6 +215,8 @@ async def record_messages(session, user_id, text, reply, ctx, outcome, response,
         tool_state['calls'] = [call.model_dump() for call in response.tool_calls]
     if outcome.pending_calls:
         tool_state['pending'] = {'calls': outcome.pending_calls}
+    if outcome.steps:
+        tool_state['steps'] = outcome.steps
     user_row = Message(id=uuid4(), user_id=user_id, role='user', text=text, created_at=ctx.now)
     assistant = Message(id=uuid4(), user_id=user_id, role='assistant', text=reply, tool_calls=tool_state,
                         latency_ms=latency, input_tokens=response.input_tokens if response else None,
@@ -206,14 +226,19 @@ async def record_messages(session, user_id, text, reply, ctx, outcome, response,
     return assistant.id
 
 
-async def quick_add_reply(session, user_id, text, ctx: ChatContext, started) -> dict:
+FALLBACK_STEP = {'kind': 'fallback', 'label': 'AI model unavailable', 'status': 'warning',
+                 'detail': 'Used quick add, which reads a title and a date without the model.'}
+
+
+async def quick_add_reply(session, user_id, text, ctx: ChatContext, started, prior_steps: Optional[list] = None) -> dict:
     """LLM outage path (PRD F1.6 / NFR-R1): regex quick-add, else an Inbox task."""
     try:
         parsed = parse_quick_add(text, now=ctx.now, timezone=ctx.timezone_name)
     except ValueError as exc:
         message_id = await record_messages(session, user_id, text, str(exc), ctx, Outcome(), None, started)
         return {'message_id': str(message_id), 'reply': str(exc), 'actions': [], 'conflicts': [],
-                'clarification': {'question': str(exc), 'options': []}, 'confirmation': None, 'fallback': True}
+                'clarification': {'question': str(exc), 'options': []}, 'confirmation': None, 'fallback': True,
+                'steps': [*(prior_steps or []), FALLBACK_STEP, {'kind': 'tool', 'label': 'Quick add', 'status': 'asked', 'detail': str(exc)[:200]}]}
     task = await create_task(session, user_id, TaskCreate(title=parsed['title'][:120], deadline_at=parsed['deadline_at']))
     await session.flush()
     action = await latest_action(session, user_id, task.id)
@@ -224,7 +249,10 @@ async def quick_add_reply(session, user_id, text, ctx: ChatContext, started) -> 
     return {'message_id': str(message_id), 'reply': reply,
             'actions': [action_card('task_created', action, task, ctx)],
             'conflicts': [conflict_card(row) for row in conflicts], 'clarification': None,
-            'confirmation': None, 'fallback': True}
+            'confirmation': None, 'fallback': True,
+            'steps': [*(prior_steps or []), FALLBACK_STEP, {'kind': 'tool', 'label': 'Quick add', 'status': 'done', 'detail': task.title, 'tool': 'create_task'},
+                      {'kind': 'check', 'label': 'Checked your deadlines still fit', 'status': 'warning' if conflicts else 'done',
+                       'detail': f"{len(conflicts)} deadline{'s' if len(conflicts) != 1 else ''} at risk" if conflicts else 'All deadlines fit'}]}
 
 
 def action_card(kind: str, log, task: Optional[Task], ctx: ChatContext, **extra) -> dict:
@@ -248,6 +276,7 @@ async def execute_calls(session, user_id, ctx: ChatContext, calls: list[ToolCall
             parsed.append((call, model.model_validate(call.arguments)))
         except ValidationError:
             outcome.clarify(f'Could you rephrase that? I could not read the details for {call.name.replace("_", " ")}.')
+            outcome.step('tool', tool_label(call.name), 'failed', 'The details did not pass validation, so nothing was changed.', tool=call.name)
     writes = [call for call, _ in parsed if call.name in WRITE_TOOLS]
     needs_confirmation = any(call.name == 'delete_task' for call, _ in parsed) or len(writes) > 3
     if needs_confirmation and not confirmed:
@@ -258,17 +287,59 @@ async def execute_calls(session, user_id, ctx: ChatContext, calls: list[ToolCall
         outcome.pending_calls = [call.model_dump() for call in calls]
         outcome.confirmation = {'prompt': f"That changes {len(writes)} item{'s' if len(writes) != 1 else ''}: "
                                           + '; '.join(names) + '. Go ahead?', 'options': ['Yes', 'No']}
+        for call, args in parsed:
+            outcome.step('tool', tool_label(call.name, args), 'waiting' if call.name in WRITE_TOOLS else 'skipped',
+                         'Held until you confirm.', tool=call.name)
         return
     for call, args in parsed:
         if call.name in WRITE_TOOLS and (args.confidence == 'low' or args.missing_fields):
             missing = ', '.join(args.missing_fields) if args.missing_fields else 'the details'
             outcome.clarify(f'Could you tell me {missing}?')
+            outcome.step('tool', tool_label(call.name, args), 'asked', f'Not sure about {missing}, so I asked instead of guessing.', tool=call.name)
             continue
         handler = HANDLERS[call.name]
+        before = (len(outcome.actions), len(outcome.replies), outcome.clarification is not None)
+        started = time.monotonic()
         try:
             await handler(session, user_id, ctx, args, outcome, confirmed)
         except HTTPException as exc:
             outcome.clarify(str(exc.detail))
+        status, detail = _step_result(outcome, before)
+        outcome.step('tool', tool_label(call.name, args), status, detail, tool=call.name,
+                     ms=int((time.monotonic() - started) * 1000))
+
+
+TOOL_LABELS = {
+    'create_task': 'Create task', 'update_task': 'Update task', 'complete_task': 'Complete task',
+    'delete_task': 'Delete task', 'create_event': 'Add event', 'query_schedule': 'Check your schedule',
+    'plan_day': 'Plan your day', 'check_capacity': 'Check if it fits', 'set_preference': 'Save a preference',
+}
+
+
+def tool_label(name: str, args=None) -> str:
+    base = TOOL_LABELS.get(name, name.replace('_', ' ').capitalize())
+    subject = (getattr(args, 'title', None) or getattr(args, 'task_ref', None)) if args is not None else None
+    if subject and name not in ('check_capacity',):
+        return f'{base} "{str(subject).strip()[:60]}"'
+    return base
+
+
+def _step_result(outcome: Outcome, before: tuple[int, int, bool]) -> tuple[str, str]:
+    """Status and a short result for one tool call, from what it added to the outcome."""
+    actions, replies, asked = before
+    new_actions = outcome.actions[actions:]
+    if outcome.clarification is not None and not asked and not new_actions:
+        return 'asked', outcome.clarification['question']
+    if outcome.confirmation is not None and not new_actions:
+        return 'waiting', outcome.confirmation['prompt']
+    if new_actions:
+        first = new_actions[0]
+        if first.get('title'):
+            return 'done', first['title']
+        return 'done', (outcome.replies[replies] if len(outcome.replies) > replies else '')
+    if len(outcome.replies) > replies:
+        return 'done', outcome.replies[replies]
+    return 'skipped', 'Nothing needed to change.'
 
 
 def describe_call(call: ToolCall, args, ctx: ChatContext) -> str:

@@ -697,3 +697,22 @@ html[data-reduced-motion="true"] .auth-story *, html[data-reduced-motion="true"]
 .nudge-dismiss:hover { color: var(--color-ink); background: var(--color-bg); }
 html[data-theme="dark"] .nudge.risk { border-color: #76515b; }
 html[data-theme="dark"] .nudge.risk .nudge-icon { background: #3b2630; color: #ffb9aa; }
+
+/* Agent steps */
+.agent-steps { margin-top: 12px; border: 1px solid var(--color-line); border-radius: 14px; background: var(--color-bg); }
+.agent-steps summary { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; padding: 10px 14px; cursor: pointer; list-style: none; }
+.agent-steps summary::-webkit-details-marker { display: none; }
+.agent-steps summary::before { content: "▸"; color: var(--color-muted); font-size: 11px; }
+.agent-steps[open] summary::before { content: "▾"; }
+.agent-steps-summary { color: var(--color-muted); font-size: 12px; }
+.agent-steps ol { list-style: none; margin: 0; padding: 0 14px 12px; display: grid; gap: 8px; }
+.agent-step { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: start; }
+.agent-step-icon { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 7px; background: var(--color-pale); color: var(--color-blue); }
+.agent-step.asked .agent-step-icon, .agent-step.waiting .agent-step-icon { background: #fff4dc; color: #8a5a00; }
+.agent-step.warning .agent-step-icon, .agent-step.failed .agent-step-icon { background: #fdecea; color: #b4321f; }
+.agent-step.skipped .agent-step-icon { background: var(--color-paper); color: var(--color-muted); }
+.agent-step-label { font-size: 12px; font-weight: 600; overflow-wrap: anywhere; }
+.agent-step-detail { font-size: 12px; color: var(--color-muted); overflow-wrap: anywhere; }
+.agent-step-time { font-size: 11px; color: var(--color-muted); font-variant-numeric: tabular-nums; }
+html[data-theme="dark"] .agent-step.asked .agent-step-icon, html[data-theme="dark"] .agent-step.waiting .agent-step-icon { background: #3a3020; color: #f3cf86; }
+html[data-theme="dark"] .agent-step.warning .agent-step-icon, html[data-theme="dark"] .agent-step.failed .agent-step-icon { background: #3b2630; color: #ffb9aa; }

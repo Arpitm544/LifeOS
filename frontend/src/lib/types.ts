@@ -89,7 +89,10 @@ export type ChatResponse = {
   clarification: { question: string; options: string[] } | null;
   confirmation: { prompt: string; options: string[] } | null;
   fallback: boolean;
+  steps?: AgentStep[];
 };
+
+export type AgentStep = { kind: "context" | "understand" | "tool" | "check" | "fallback" | "confirm"; label: string; status: "done" | "asked" | "waiting" | "skipped" | "failed" | "warning"; detail: string; tool?: string; ms?: number };
 
 export type Suggestion = { id: string; type: string; text: string; payload?: Record<string, unknown>; status: string };
 export type Insights = {
