@@ -1,5 +1,10 @@
 # LifeOS backend
 
+Groq Cloud can be used for chat and insight wording by setting `GROQ_API_KEY` and
+optionally `GROQ_MODEL` in the server environment. When configured, Groq takes
+precedence over Anthropic; the same backend validators execute all tool calls.
+Keep API keys out of Git and browser bundles.
+
 This service follows the PRD boundary: the LLM may interpret language and write replies, while backend code owns dates, validation, priorities, schedules, capacity checks, reminders, and state changes.
 
 ## What the API does
@@ -51,7 +56,7 @@ The API contract keeps timestamps in UTC and accepts the client timezone for loc
 
 Local PostgreSQL without TLS: set `DATABASE_SSL=false`. Hosted databases keep the default `true`; the wheel includes the Supabase CA and fails if that packaged asset is missing.
 
-Chat uses `ANTHROPIC_API_KEY` and `ANTHROPIC_MODEL` (default `claude-sonnet-5-5`); insight wording uses `ANTHROPIC_INSIGHT_MODEL` (default `claude-haiku-5-5`). No-action provider replies do not create tasks. Missing credentials, transport failures and malformed provider responses use quick-add; past deadlines ask for clarification.
+When `GROQ_API_KEY` is set, chat and insight wording use `GROQ_MODEL` (default `openai/gpt-oss-20b`). Otherwise, chat uses `ANTHROPIC_API_KEY` and `ANTHROPIC_MODEL` (default `claude-sonnet-5-5`); insight wording uses `ANTHROPIC_INSIGHT_MODEL` (default `claude-haiku-5-5`). No-action provider replies do not create tasks. Missing credentials, transport failures and malformed provider responses use quick-add; past deadlines ask for clarification.
 
 Apply migrations in numeric order: `006` must already be applied before `007` (see `migrations/README.md`). Run the worker as a second process:
 
