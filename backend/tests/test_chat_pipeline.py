@@ -10,7 +10,7 @@ from sqlalchemy.ext.compiler import compiles
 
 from app.models import Base, Event, Message, PlanBlock, Preference, Reminder, Task
 from app.services.chat_orchestrator import handle_chat
-from app.services.llm_client import LLMResponse, LLMUnavailable
+from app.services.llm_client import GroqLLMClient, LLMResponse, LLMUnavailable
 from app.services.nlu_validator import ToolCall, check_phrase, tool_definitions
 from app.services.text_match import reference_score, similarity
 
@@ -247,6 +247,21 @@ def test_set_preference_merges_and_query_and_plan_day_answer_from_code():
 def test_llm_outage_falls_back_to_quick_add():
     async def body(session):
         llm = RecordedLLM(LLMUnavailable('timeout'))
+        result = await handle_chat(session, user_id=OWNER, text='Buy milk by tomorrow', client_tz='UTC', llm=llm)
+        assert result['fallback'] and result['actions'][0]['title'] == 'Buy milk'
+    run_with_session(body)
+
+
+@pytest.mark.parametrize('choices', [[], [None], [{'message': None}]])
+def test_malformed_groq_response_falls_back_to_quick_add(monkeypatch, choices):
+    llm = GroqLLMClient('test-only-key', 'test-model')
+
+    async def respond(body):
+        return {'choices': choices}
+
+    monkeypatch.setattr(llm, '_post', respond)
+
+    async def body(session):
         result = await handle_chat(session, user_id=OWNER, text='Buy milk by tomorrow', client_tz='UTC', llm=llm)
         assert result['fallback'] and result['actions'][0]['title'] == 'Buy milk'
     run_with_session(body)

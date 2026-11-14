@@ -93,6 +93,30 @@ def render_context(context: dict) -> str:
     return '\n'.join(lines)
 
 
+async def _post_json(url: str, headers: dict, body: dict, *, timeout_seconds: float,
+                     retry_statuses: set[int]) -> dict:
+    import httpx
+    deadline = time.monotonic() + timeout_seconds
+    last_error: Exception | None = None
+    for attempt in range(2):  # one retry, inside the same overall budget
+        remaining = deadline - time.monotonic()
+        if remaining <= 0.5:
+            break
+        try:
+            async with httpx.AsyncClient(timeout=remaining) as client:
+                response = await asyncio.wait_for(client.post(url,
+                    headers=headers,
+                    json=body), timeout=remaining)
+            if response.status_code in retry_statuses and attempt == 0:
+                last_error = httpx.HTTPStatusError('retryable', request=response.request, response=response)
+                continue
+            response.raise_for_status()
+            return response.json()
+        except (httpx.TimeoutException, httpx.TransportError, asyncio.TimeoutError) as exc:
+            last_error = exc
+    raise LLMUnavailable(str(last_error or 'timeout'))
+
+
 class AnthropicLLMClient:
     def __init__(self, api_key: str, model: str, *, insight_model: str | None = None,
                  timeout_seconds: float = 8.0):
@@ -101,26 +125,9 @@ class AnthropicLLMClient:
         self.timeout_seconds = timeout_seconds
 
     async def _post(self, body: dict) -> dict:
-        import httpx
-        deadline = time.monotonic() + self.timeout_seconds
-        last_error: Exception | None = None
-        for attempt in range(2):  # one retry, inside the same overall budget
-            remaining = deadline - time.monotonic()
-            if remaining <= 0.5:
-                break
-            try:
-                async with httpx.AsyncClient(timeout=remaining) as client:
-                    response = await asyncio.wait_for(client.post(ANTHROPIC_URL,
-                        headers={'x-api-key': self.api_key, 'anthropic-version': '2023-06-01'},
-                        json=body), timeout=remaining)
-                if response.status_code in {429, 500, 502, 503, 504, 529} and attempt == 0:
-                    last_error = httpx.HTTPStatusError('retryable', request=response.request, response=response)
-                    continue
-                response.raise_for_status()
-                return response.json()
-            except (httpx.TimeoutException, httpx.TransportError, asyncio.TimeoutError) as exc:
-                last_error = exc
-        raise LLMUnavailable(str(last_error or 'timeout'))
+        return await _post_json(ANTHROPIC_URL,
+            {'x-api-key': self.api_key, 'anthropic-version': '2023-06-01'}, body,
+            timeout_seconds=self.timeout_seconds, retry_statuses={429, 500, 502, 503, 504, 529})
 
     async def parse(self, *, text: str, context: dict, history: list[dict] | None = None) -> LLMResponse:
         started = time.monotonic()
@@ -165,26 +172,19 @@ class GroqLLMClient(AnthropicLLMClient):
     """Groq Cloud chat completions using the same validated local tools."""
 
     async def _post(self, body: dict) -> dict:
-        import httpx
-        deadline = time.monotonic() + self.timeout_seconds
-        last_error: Exception | None = None
-        for attempt in range(2):
-            remaining = deadline - time.monotonic()
-            if remaining <= 0.5:
-                break
-            try:
-                async with httpx.AsyncClient(timeout=remaining) as client:
-                    response = await asyncio.wait_for(client.post(
-                        'https://api.groq.com/openai/v1/chat/completions',
-                        headers={'Authorization': 'Bearer ' + self.api_key}, json=body), timeout=remaining)
-                if response.status_code in {429, 500, 502, 503, 504} and attempt == 0:
-                    last_error = httpx.HTTPStatusError('retryable', request=response.request, response=response)
-                    continue
-                response.raise_for_status()
-                return response.json()
-            except (httpx.TimeoutException, httpx.TransportError, asyncio.TimeoutError) as exc:
-                last_error = exc
-        raise LLMUnavailable(str(last_error or 'timeout'))
+        return await _post_json('https://api.groq.com/openai/v1/chat/completions',
+            {'Authorization': 'Bearer ' + self.api_key}, body,
+            timeout_seconds=self.timeout_seconds, retry_statuses={429, 500, 502, 503, 504})
+
+    @staticmethod
+    def _message(data: dict) -> dict:
+        try:
+            message = data['choices'][0]['message']
+        except (KeyError, IndexError, TypeError) as exc:
+            raise ValueError('Malformed Groq response') from exc
+        if not isinstance(message, dict):
+            raise ValueError('Malformed Groq response')
+        return message
 
     async def parse(self, *, text: str, context: dict, history: list[dict] | None = None) -> LLMResponse:
         started = time.monotonic()
@@ -199,7 +199,7 @@ class GroqLLMClient(AnthropicLLMClient):
             for item in tool_definitions()]
         data = await self._post({'model': self.model, 'messages': messages, 'tools': tools,
             'tool_choice': 'auto', 'temperature': 0, 'max_tokens': 1024})
-        message = data['choices'][0]['message']
+        message = self._message(data)
         calls = [ToolCall(name=item['function']['name'],
             arguments=json.loads(item['function']['arguments'])) for item in message.get('tool_calls') or []]
         usage = data.get('usage') or {}
@@ -211,7 +211,7 @@ class GroqLLMClient(AnthropicLLMClient):
         data = await self._post({'model': self.insight_model, 'temperature': 0.4, 'max_tokens': 600,
             'messages': [{'role': 'system', 'content': system},
                 {'role': 'user', 'content': json.dumps(payload, default=str)}]})
-        return data['choices'][0]['message'].get('content') or ''
+        return self._message(data).get('content') or ''
 
 
 def configured_llm():
