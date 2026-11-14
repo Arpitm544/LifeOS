@@ -32,7 +32,7 @@ export default function InsightsPage() {
   }
 
   if (!data) return <>
-    <PageHeading eyebrow="A clearer picture of you" title="Find your rhythm. Keep it." description="Patterns from your own tasks and plans." />
+    <PageHeading eyebrow="A clearer picture of you" title="Find a pace that works." description="Patterns from your own tasks and plans." />
     {error ? <div className="panel empty-state" role="alert"><h2>Insights are unavailable.</h2><p>{error}</p><button className="button" onClick={load}>Try again</button></div> : <p className="muted" role="status">Loading insights…</p>}
   </>;
 
@@ -48,7 +48,7 @@ export default function InsightsPage() {
   const dayLabel = (date: string) => new Intl.DateTimeFormat("en-IN", { day: "numeric", month: "short", timeZone: "UTC" }).format(new Date(`${date}T00:00:00Z`));
 
   return <>
-    <PageHeading eyebrow="A clearer picture of you" title="Find your rhythm. Keep it." description={data.cold_start ? `Learning from your history: ${data.samples} of 10 completed tasks with timing so far.` : "Patterns from your last 14 days of tasks and plans."} />
+    <PageHeading eyebrow="A clearer picture of you" title="Find a pace that works." description={data.cold_start ? `Learning from your history: ${data.samples} of 10 completed tasks with timing so far.` : "Patterns from your last 14 days of tasks and plans."} />
     <div className="metrics-grid">
       <section className="panel metric"><h2>Completed this week</h2><p className="metric-value">{thisWeek}</p><p>{change === 0 ? "Same as last week" : `${Math.abs(change)} ${change < 0 ? "fewer" : "more"} than last week`}{data.completion_rate !== null ? ` · ${Math.round(data.completion_rate * 100)}% on time` : ""}</p></section>
       <section className="panel metric"><h2>Plan adherence</h2><p className="metric-value">{adherence}</p><p>{data.planned_blocks_14d ? `Of ${data.planned_blocks_14d} planned blocks in 14 days` : "No planned blocks yet"}</p></section>
@@ -58,11 +58,11 @@ export default function InsightsPage() {
       {chart.length ? <div className="bar-chart" role="img" aria-label={`Completed tasks per day: ${chart.map(day => `${dayLabel(day.date)} ${day.completed}`).join(", ")}.`}>
         {chart.map((day, index) => <div className="chart-column" key={day.date}><div className={`chart-bar ${index === chart.length - 1 ? "latest" : ""}`} style={{ height: `${Math.max(4, (day.completed / peak) * 150)}px` }} title={`${dayLabel(day.date)}: ${day.completed} completed`} /><span>{new Date(`${day.date}T00:00:00Z`).getUTCDate()}</span></div>)}
       </div> : <p className="muted">No history yet.</p>}
-    </section><section className="panel dark suggestion"><p className="eyebrow lime">A little adjustment</p>
-      {data.suggestions.length ? data.suggestions.map(suggestion => <div key={suggestion.id} className="suggestion-item"><p>{suggestion.text}</p><div className="button-row"><button className="button" disabled={!!busy} onClick={() => decide(suggestion, "apply")}>Apply <span aria-hidden="true">↗</span></button><button className="text-button light" disabled={!!busy} onClick={() => decide(suggestion, "dismiss")}>Dismiss</button></div></div>)
+    </section><section className="panel dark suggestion"><p className="eyebrow accent">A little adjustment</p>
+      {data.suggestions.length ? data.suggestions.map(suggestion => <div key={suggestion.id} className="suggestion-item"><p>{suggestion.text}</p><div className="button-row"><button className="button" disabled={!!busy} onClick={() => decide(suggestion, "apply")}>Apply <span aria-hidden="true">→</span></button><button className="text-button light" disabled={!!busy} onClick={() => decide(suggestion, "dismiss")}>Dismiss</button></div></div>)
         : <><h2>Nothing to change right now.</h2><p>Suggestions appear once LifeOS sees a clear pattern in your history.</p></>}
       <small>Applying a suggestion saves a preference you can change in Profile.</small>
     </section></div>
-    <section className="panel pale sweet-spot"><p className="eyebrow blue">Your sweet spot</p>{focus ? <><h2>{hour(focus[0])}–{hour(focus[1])}. Your clearest hours.</h2><p>Protect this window for your most important work.{data.focus_windows.length > 1 ? ` Also strong: ${data.focus_windows.slice(1).map(([s, e]) => `${hour(s)}–${hour(e)}`).join(", ")}.` : ""}</p></> : <><h2>Still learning your rhythm.</h2><p>Complete a few more tasks and LifeOS will show when you focus best.</p></>}</section>
+    <section className="panel pale sweet-spot"><p className="eyebrow blue">Your sweet spot</p>{focus ? <><h2>{hour(focus[0])}–{hour(focus[1])}. Your clearest hours.</h2><p>Protect this window for your most important work.{data.focus_windows.length > 1 ? ` Also strong: ${data.focus_windows.slice(1).map(([s, e]) => `${hour(s)}–${hour(e)}`).join(", ")}.` : ""}</p></> : <><h2>Still learning your best pace.</h2><p>Complete a few more tasks and LifeOS will show when you focus best.</p></>}</section>
   </>;
 }
