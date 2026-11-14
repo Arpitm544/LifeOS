@@ -1,10 +1,9 @@
 from __future__ import annotations
 from typing import Optional
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from fastapi import FastAPI
 from .schemas import ChatRequest
-from .services.quick_add import parse_quick_add
 from .auth import current_user_id
 from .db import get_session
 from .services.chat_orchestrator import handle_chat
@@ -29,6 +28,10 @@ from .models import IdempotencyRecord
 from .rate_limit import RateLimitMiddleware
 from .api.tasks import router as tasks_router
 from .api.task_batches import router as task_batches_router
+from .api.push import router as push_router
+from .api.account import router as account_router
+from .config import get_settings
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(title="LifeOS API", version="0.1.0")
 app.add_middleware(RateLimitMiddleware)
@@ -46,10 +49,33 @@ app.include_router(preferences_router)
 app.include_router(plan_blocks_router)
 app.include_router(today_router)
 app.include_router(conflicts_router)
+app.include_router(push_router)
+app.include_router(account_router)
+# Added last so it wraps everything: browser preflight requests are answered here,
+# before authentication and rate limiting, and error responses keep CORS headers.
+app.add_middleware(CORSMiddleware, allow_origins=get_settings().cors_origin_list,
+                   allow_methods=['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
+                   allow_headers=['Authorization', 'Content-Type', 'Idempotency-Key'],
+                   allow_credentials=False, max_age=600)
 
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/health/worker")
+async def worker_health() -> dict:
+    """Worker heartbeat (NFR-R5): stale when no worker reported in the last 2 minutes."""
+    from .db import SessionFactory
+    from .models import WorkerStatus
+    async with SessionFactory() as session:
+        last = (await session.execute(select(WorkerStatus.last_seen_at).order_by(
+            WorkerStatus.last_seen_at.desc()).limit(1))).scalar_one_or_none()
+    if last is None:
+        return {"status": "missing", "last_seen_at": None}
+    last = last if last.tzinfo else last.replace(tzinfo=timezone.utc)
+    stale = datetime.now(timezone.utc) - last > timedelta(minutes=2)
+    return {"status": "stale" if stale else "ok", "last_seen_at": last}
 
 @app.post("/api/chat")
 async def chat(request: ChatRequest, idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key", min_length=1, max_length=128),

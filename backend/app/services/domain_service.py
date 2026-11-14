@@ -44,10 +44,16 @@ async def sync_reminders(session, owner, row):
     from .reminder_service import task_reminder_times, event_reminder_time, move_out_of_quiet_hours
     from zoneinfo import ZoneInfo
     kind = 'task' if isinstance(row, Task) else 'event'
-    await session.execute(update(Reminder).where(Reminder.user_id == owner, Reminder.item_type == kind,
-        Reminder.item_id == row.id, Reminder.status == 'pending').values(status='cancelled'))
-    if (kind == 'task' and row.status not in {'open', 'blocked'}) or (kind == 'event' and row.cancelled):
+    inactive = (kind == 'task' and row.status not in {'open', 'blocked'}) or (kind == 'event' and row.cancelled)
+    pending = Reminder.user_id == owner, Reminder.item_type == kind, Reminder.item_id == row.id, Reminder.status == 'pending'
+    if inactive:
+        # Completed, dropped or cancelled items lose every pending reminder.
+        await session.execute(update(Reminder).where(*pending).values(status='cancelled'))
         return
+    await session.execute(update(Reminder).where(*pending, Reminder.kind.in_(RULE_KINDS)).values(status='cancelled'))
+    custom = (await session.execute(select(Reminder.id).where(*pending, Reminder.kind == 'custom'))).first()
+    if custom:
+        return  # A user-requested time overrides the rules for this item.
     prefs = (await session.execute(select(Preference).where(Preference.user_id == owner,
         Preference.status == 'active'))).scalars().all()
     values = {item.key: item.value for item in prefs}
@@ -58,7 +64,8 @@ async def sync_reminders(session, owner, row):
     if deadline is None:
         return
     deadline = deadline.replace(tzinfo=timezone.utc) if deadline.tzinfo is None else deadline
-    times = task_reminder_times(deadline=deadline, effort_min=row.effort_est_min, now=now) if kind == 'task' else [('event', event_reminder_time(start=deadline, location=row.location))]
+    lead = int(values.get('reminder_lead', {}).get('minutes', 60))
+    times = task_reminder_times(deadline=deadline, effort_min=row.effort_est_min, now=now, buffer_min=lead) if kind == 'task' else [('event', event_reminder_time(start=deadline, location=row.location))]
     scheduled = set()
     for reminder_kind, fire_at in times:
         fire_at = move_out_of_quiet_hours(fire_at.astimezone(tz),
@@ -69,7 +76,31 @@ async def sync_reminders(session, owner, row):
             continue
         scheduled.add(fire_at)
         session.add(Reminder(user_id=owner, item_type=kind, item_id=row.id, kind=reminder_kind,
-            fire_at=fire_at.astimezone(timezone.utc), status='pending', message=row.title))
+            fire_at=fire_at.astimezone(timezone.utc), status='pending',
+            message=reminder_message(reminder_kind, row, deadline, fire_at, tz)))
+
+
+RULE_KINDS = ('start_now', 'due_soon', 'overdue', 'event')
+
+
+def _hours(minutes: int) -> str:
+    return f'{minutes} min' if minutes < 60 else f'{minutes / 60:.1f}'.rstrip('0').rstrip('.') + ' h'
+
+
+def reminder_message(kind, row, deadline, fire_at, tz) -> str:
+    """Template text filled at creation time, so delivery never waits on an LLM."""
+    local = deadline.astimezone(tz)
+    when = local.strftime('%a %d %b %H:%M')
+    if kind == 'event':
+        where = f' at {row.location}' if row.location else ''
+        return f'{row.title} starts {local.strftime("%H:%M")}{where}.'
+    work = _hours(row.effort_est_min)
+    if kind == 'start_now':
+        return f'{row.title} due {when}, about {work} of work. Start now or reschedule?'
+    if kind == 'due_soon':
+        left = max(0, int((deadline - fire_at).total_seconds() // 60))
+        return f'{row.title} due in {_hours(left)}, about {work} of work left. Start now or reschedule?'
+    return f'{row.title} was due {when}. Done, or move it?'
 
 
 async def lock_owner(session, owner):
@@ -131,6 +162,15 @@ async def refresh_blocked(session, owner):
             task.status = 'blocked' if task.id in blocked else 'open'
 
 
+# Recomputed by the priority engine after any change; not user edits, so a later
+# re-score must not block Undo of an earlier action.
+DERIVED_COLUMNS = {'priority_score', 'priority_band', 'priority_why', 'priority_breakdown'}
+
+
+def _comparable(values):
+    return {key: value for key, value in (values or {}).items() if key not in DERIVED_COLUMNS}
+
+
 async def undo_logged_action(session, owner, action_id):
     await lock_owner(session, owner)
     log = (await session.execute(select(ActionLog).where(ActionLog.id == action_id,
@@ -151,7 +191,8 @@ async def undo_logged_action(session, owner, action_id):
         log.undone_at = datetime.now(timezone.utc)
         await session.flush()
         return True
-    model = {'task': Task, 'tasks': Task, 'events': Event, 'preferences': Preference, 'routines': Routine, 'plan_blocks': PlanBlock}.get(log.entity)
+    from ..models import Conflict
+    model = {'task': Task, 'tasks': Task, 'events': Event, 'preferences': Preference, 'routines': Routine, 'plan_blocks': PlanBlock, 'conflicts': Conflict}.get(log.entity)
     if model is None:
         raise HTTPException(status_code=409, detail='This action cannot be undone')
     row = (await session.execute(select(model).where(model.id == log.entity_id,
@@ -179,7 +220,7 @@ async def undo_logged_action(session, owner, action_id):
         if model is Preference:
             await sync_all_reminders(session, owner)
         return True
-    if row is None or snapshot(row) != log.after:
+    if row is None or _comparable(snapshot(row)) != _comparable(log.after):
         raise HTTPException(status_code=409, detail='Item changed since this action')
     if log.action_type == 'create':
         # Refuse cascading destruction of later work.
@@ -204,6 +245,9 @@ async def undo_logged_action(session, owner, action_id):
     await session.flush()
     if model is Task:
         await refresh_blocked(session, owner)
+        if log.action_type != 'create':
+            from .planning_service import recalculate_priorities
+            await recalculate_priorities(session, owner)
     if log.action_type != 'create' and model in (Task, Event):
         await sync_reminders(session, owner, row)
     if model is Preference:

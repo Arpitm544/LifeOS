@@ -10,6 +10,7 @@ Apply in order as an administrator in Supabase SQL Editor:
 - `004_routine_instances.sql`: adds routine anchor/override fields and audit batch ids.
 - `005_clerk_identity.sql`: required Clerk cutover. Converts LifeOS tenant ids from UUID to text, removes Supabase Auth ownership links, creates local Clerk-user FKs and rewrites RLS policies around the transaction-scoped Clerk subject.
 - `006_runtime_safety.sql`: shared atomic rate-limit storage, expiry cleanup and current-date routine default.
+- `007_backend_enhancements.sql`: task priority `why`/breakdown columns, reminder kind check and indexes, `suggestions` table (RLS, `lifeos_api` grants), `worker_status` heartbeat table (admin only), analytics indexes and the `prune_lifeos_history()` retention function (scheduled with pg_cron when that extension is installed).
 
 Each of 002 and 003 is atomic. Invalid/orphaned existing data aborts 003 and rolls back; diagnose the failing constraint rather than deleting data. Avoid other applications sharing these public table names. Record successful migration execution before rerunning scripts.
 
@@ -19,7 +20,7 @@ API transactions use `SET LOCAL ROLE lifeos_api` and transaction-local JWT subje
 
 For production, provision a separate database login through the project administrator, grant it only `lifeos_api` membership and put its connection string in server `.env`. Do not grant ownership, superuser, BYPASSRLS or unrelated roles. Never grant membership to frontend roles or expose administrator credentials in the frontend.
 
-Migration/demo scripts intentionally use unscoped administrative sessions. A worker needing cross-user access requires a separate worker credential design; the API role is tenant scoped.
+Migration/demo scripts intentionally use unscoped administrative sessions. The reminder worker (`python -m app.worker`) needs cross-user access, so it uses an administrative connection (`WORKER_DATABASE_URL`, defaulting to `DATABASE_URL`); the API role stays tenant scoped. In production give the worker its own login rather than reusing the migration administrator.
 
 ## Clerk authentication configuration
 
@@ -35,7 +36,7 @@ Use a disposable migrated Supabase test project. Configure `TEST_DATABASE_URL` p
 RUN_POSTGRES_TESTS=1 .venv/bin/python -m pytest tests/test_postgres_security.py -v
 ```
 
-The test inserts two synthetic local Clerk users/tasks inside a transaction, switches to the API role, verifies isolated reads/writes and cross-owner FK rejection, then rolls back all inserted rows. Without both opt-in and URL it skips. It neither installs migrations nor proves fresh/upgrade compatibility. Test 001→002→003→004→005→006 on a fresh project and 004→005→006 on an existing migrated project before marking Step 2 complete.
+The test inserts two synthetic local Clerk users/tasks inside a transaction, switches to the API role, verifies isolated reads/writes and cross-owner FK rejection, then rolls back all inserted rows. Without both opt-in and URL it skips. It neither installs migrations nor proves fresh/upgrade compatibility. Test 001→…→007 on a fresh project and the unapplied files on an existing migrated project before rollout.
 
 The isolated PostgreSQL repair suite verifies fresh/upgrade migrations, rollback, role validation, RLS and concurrency on a disposable cluster. It does not validate a hosted Supabase project or provision its production login.
 

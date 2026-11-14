@@ -20,8 +20,9 @@ def move_out_of_quiet_hours(moment: datetime, *, quiet_start: tuple[int, int] = 
     return moment
 
 
-def task_reminder_times(*, deadline: datetime, effort_min: int, now: datetime) -> list[tuple[str, datetime]]:
-    return [("start_now", deadline - timedelta(minutes=effort_min + 60)),
+def task_reminder_times(*, deadline: datetime, effort_min: int, now: datetime,
+                        buffer_min: int = 60) -> list[tuple[str, datetime]]:
+    return [("start_now", deadline - timedelta(minutes=effort_min + buffer_min)),
             ("due_soon", deadline - timedelta(hours=2)),
             ("overdue", deadline + timedelta(minutes=15))]
 

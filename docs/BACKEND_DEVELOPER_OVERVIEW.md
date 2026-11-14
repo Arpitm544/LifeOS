@@ -4,16 +4,22 @@
 
 `Backend` contains the FastAPI/PostgreSQL backend for LifeOS. It follows the PRD architecture: **Clerk owns authentication**, Supabase supplies PostgreSQL, and FastAPI derives the tenant only from a verified Clerk session token.
 
-## What is implemented locally
+## What is implemented
 
 | Area | Available now | Important notes |
 | --- | --- | --- |
-| Authentication and tenant boundaries | Clerk RS256 JWT verification, pinned issuer/JWKS, optional audience and authorized-party checks, transaction-scoped tenant context and RLS migration | Configure `CLERK_ISSUER`; never send Clerk secret keys to the API. Migration `005_clerk_identity.sql` is required after `001`–`004`. |
-| Data model | Tasks, events, routines, preferences, reminders, plan blocks, conflicts, audit logs, messages, subscriptions and worker heartbeat | User IDs are Clerk text subjects; all domain item IDs remain UUIDs. |
-| Task and event lifecycle | Create/list/filter/edit/complete/drop task; event create/edit/cancel; ownership checks | Deletes are intentional state transitions, not destructive row removal in normal flows. |
-| Domain safety | Dependency graph/cycle detection, blocked/unblocked refresh, typed preferences, recurrence instance overrides, audit trail and 10-second Undo | Batch changes must be undone as a whole. |
-| Planning foundation | Calendar-aware priority recalculation, event/routine busy time, work/focus windows, plan rebuild, persisted conflicts and timezone-aware Today endpoint | Step 4 is still in progress: apply/Undo and concurrency behavior are not finished. |
-| Reminder foundation | Task/event reminder generation and quiet-hour adjustment during mutations | Web Push, durable polling, retries and scheduled workers are not implemented. |
+| Authentication and tenant boundaries | Clerk RS256 JWT verification, pinned issuer/JWKS, optional audience and authorized-party checks, transaction-scoped tenant context and RLS migration | Configure `CLERK_ISSUER`; never send Clerk secret keys to the API. |
+| Browser access | CORS for `CORS_ORIGINS` (default `http://localhost:3000`, `http://127.0.0.1:3000`) | Preflight is answered before auth and rate limiting. |
+| Data model | Tasks, events, routines, preferences, reminders, plan blocks, conflicts, audit logs, messages, subscriptions, suggestions, worker status | Migrations `001`–`007`, additive only. |
+| Task and event lifecycle | Create/list/filter/edit/complete/drop task, record actual effort (`POST /api/tasks/{id}/actual-effort`); event create/edit/cancel | Deletes are state transitions (`dropped`). |
+| Domain safety | Dependency graph/cycle detection, typed preferences, recurrence overrides, audit trail and 10-second Undo | Undo ignores derived priority fields, so later re-scores do not block it. |
+| Chat pipeline | All nine PRD tools, context (preferences, top-30 open tasks with trigram matches first, today's events, last 6 messages, last touched item), validation, one clarification, confirmation for deletes and >3 writes, duplicate guard, custom reminders, message history | `POST /api/chat` response: `{message_id, reply, actions[], conflicts[], clarification: {question, options} or null, confirmation: {prompt, options} or null, fallback}`. Reply "yes"/"no" to a confirmation. |
+| Planning and Capacity Guard | Calibrated effort, priority `why` + breakdown, `POST /api/plan/rebuild`, Today with titles and free minutes, conflict detection after every change, option simulation with previews, resolve as one undoable batch, hypothetical capacity check | Working hours are planning supply; focus windows do not shrink it. Extended evenings are stored as `work_hours_overrides`. |
+| Reminders | Rule-based reminder templates, `reminder_lead` preference, custom and plan-block reminders, Done/Snooze/Reschedule, notification centre | Reschedule: action returns 3 slots, then `POST /api/reminders/{id}/reschedule {start_at}`. |
+| Worker and push | `python -m app.worker`: Web Push delivery with VAPID, per-user 10-minute merge, missed marking, hourly re-score, daily plan push, nightly retention, heartbeat (`GET /health/worker`) | Needs an administrative DB connection (`WORKER_DATABASE_URL`). |
+| Insights | DB-backed metrics and 14-day chart, grounded suggestions (numbers must exist in the stats), Apply/Dismiss | LLM wording is optional; template suggestions are used otherwise. |
+| Privacy | `GET /api/export`, `DELETE /api/account?confirmed=true` | Push keys are left out of exports. The Clerk account itself is deleted through Clerk. |
+| Voice | Removed | No `spoken_reply`, `source` or transcription endpoint. |
 
 ## Verified evidence
 
@@ -23,7 +29,7 @@ Run from `backend/`:
 .venv/bin/python -m pytest tests -q
 ```
 
-Current local result: **81 passed, 1 skipped**. The skip is intentional: `test_postgres_security.py` requires an explicitly configured, migrated PostgreSQL database.
+Current local result: **137 passed, 3 skipped** (SQLite). The skips need PostgreSQL: `test_postgres_repairs.py` (2 tests, passes against a disposable Postgres 16 with `REPAIR_TEST_DATABASE_URL`, including migration 007) and `test_postgres_security.py`.
 
 ## Required environment
 
@@ -42,18 +48,16 @@ CLERK_AUTHORIZED_PARTIES=http://localhost:3000
 ## Migration and release sequence
 
 1. Back up any non-fixture database data.
-2. Ensure the Supabase `auth.users`/`auth.uid()` baseline exists, then for a fresh database apply migrations `001` through `006` in order. For an existing database, apply only unapplied migrations according to `backend/migrations/README.md`; never rerun `001`. For an existing Supabase-auth UUID dataset, decide how legacy IDs map to Clerk IDs before applying `005`; it deliberately does not invent identity mappings.
+2. Ensure the Supabase `auth.users`/`auth.uid()` baseline exists, then for a fresh database apply migrations `001` through `007` in order. For an existing database, apply only unapplied migrations according to `backend/migrations/README.md`; never rerun `001`. For an existing Supabase-auth UUID dataset, decide how legacy IDs map to Clerk IDs before applying `005`; it deliberately does not invent identity mappings.
 3. Run the opt-in PostgreSQL/RLS test with a disposable or approved test database.
 4. Configure the API service with a non-admin database role that can assume `lifeos_api`.
 5. Send a Clerk session token in `Authorization: Bearer <token>` from the frontend.
 
 ## Remaining engineering work
 
-- Finish Step 4: schedule preview/confirmed apply/Undo, priority configuration, concurrency serialization and performance fixtures.
-- Step 5: provider-backed AI chat/tool calling and golden conversation tests.
-- Step 6: Web Push, worker delivery, retry/dedupe and scheduled jobs.
-- Step 7: real insights, export/deletion/retention and deployment security hardening.
-- Step 8: CI, integration/performance verification and release handoff.
+- 50-utterance golden NLU set against the live model (the pipeline is tested with recorded tool calls).
+- Load and performance checks (k6, p95 targets) and CI.
+- Google Calendar import (P1) and the frontend service worker for push actions.
 
 ## Working conventions
 

@@ -32,17 +32,37 @@ async def today(day: Optional[date] = Query(default=None), session: AsyncSession
     conflicts = (await session.execute(select(Conflict).where(Conflict.user_id == user_id,
         Conflict.status == 'open').order_by(Conflict.deadline_at))).scalars().all()
     now = datetime.now(timezone.utc)
+    titles = dict((await session.execute(select(Task.id, Task.title).where(Task.user_id == user_id,
+        Task.id.in_([block.task_id for block in blocks] or [None])))).all())
+    from ..services.planning_service import load_state
+    free_min = 0
+    if end > now:
+        state = await load_state(session, user_id, now=max(now, start), days=1)
+        planned_busy = [(b.start_at if b.start_at.tzinfo else b.start_at.replace(tzinfo=timezone.utc),
+                         b.end_at if b.end_at.tzinfo else b.end_at.replace(tzinfo=timezone.utc))
+                        for b in blocks if b.status == 'planned']
+        for slot in state.slots:
+            s_start, s_end = max(slot.start, now, start), min(slot.end, end)
+            if s_end <= s_start:
+                continue
+            minutes = (s_end - s_start).total_seconds() / 60
+            for b_start, b_end in planned_busy:
+                overlap = (min(s_end, b_end) - max(s_start, b_start)).total_seconds() / 60
+                minutes -= max(0, overlap)
+            free_min += max(0, int(minutes))
     next_block = next((block for block in blocks if block.status == 'planned' and
                        block.end_at.replace(tzinfo=timezone.utc) > now), None)
     return {
         "date": selected,
         "timezone": str(zone),
         "events": [{"id": str(item.id), "title": item.title, "start_at": item.start_at, "end_at": item.end_at, "location": item.location} for item in events],
-        "plan_blocks": [{"id": str(item.id), "task_id": str(item.task_id), "start_at": item.start_at, "end_at": item.end_at, "status": item.status} for item in blocks],
-        "due_tasks": [{"id": str(item.id), "title": item.title, "deadline_at": item.deadline_at, "priority_score": item.priority_score, "priority_band": item.priority_band, "status": item.status} for item in tasks],
+        "plan_blocks": [{"id": str(item.id), "task_id": str(item.task_id), "title": titles.get(item.task_id), "start_at": item.start_at, "end_at": item.end_at, "status": item.status} for item in blocks],
+        "free_min_left": free_min,
+        "due_tasks": [{"id": str(item.id), "title": item.title, "deadline_at": item.deadline_at, "priority_score": item.priority_score, "priority_band": item.priority_band, "status": item.status, "why": item.priority_why, "overdue": bool(item.deadline_at and (item.deadline_at if item.deadline_at.tzinfo else item.deadline_at.replace(tzinfo=timezone.utc)) < now)} for item in tasks],
         "conflicts": [{"id": str(item.id), "deadline_at": item.deadline_at,
+                       "needed_min": item.needed_min, "free_min": item.free_min, "task_ids": item.task_ids,
                        "shortfall_min": max(0, item.needed_min - item.free_min),
                        "options": item.options} for item in conflicts],
-        "next": {"type": "plan_block", "id": str(next_block.id), "start_at": next_block.start_at, "task_id": str(next_block.task_id)} if next_block else None,
+        "next": {"type": "plan_block", "id": str(next_block.id), "start_at": next_block.start_at, "end_at": next_block.end_at, "task_id": str(next_block.task_id), "title": titles.get(next_block.task_id)} if next_block else None,
     }
 

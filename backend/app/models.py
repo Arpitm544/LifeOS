@@ -33,6 +33,8 @@ class Task(Base):
     status: Mapped[str] = mapped_column(String(16), default="open", index=True)
     priority_score: Mapped[float] = mapped_column(default=0)
     priority_band: Mapped[str] = mapped_column(String(2), default="P3")
+    priority_why: Mapped[Optional[str]] = mapped_column(Text)
+    priority_breakdown: Mapped[Optional[dict]] = mapped_column(JSONB)
     pinned: Mapped[bool] = mapped_column(Boolean, default=False)
     recurrence_rrule: Mapped[Optional[str]] = mapped_column(String(512))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
@@ -184,3 +186,23 @@ class WorkerHeartbeat(Base):
     worker_name: Mapped[str] = mapped_column(Text)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
 
+
+
+class Suggestion(Base):
+    """Insight suggestions shown on the Insights screen (Apply / Dismiss)."""
+    __tablename__ = 'suggestions'
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[str] = mapped_column(ClerkUserId(), index=True)
+    type: Mapped[str] = mapped_column(String(32))
+    text: Mapped[str] = mapped_column(Text)
+    payload: Mapped[dict] = mapped_column(JSONB, default=dict)
+    status: Mapped[str] = mapped_column(String(16), default='active')
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+
+class WorkerStatus(Base):
+    """Worker liveness, not tenant data: written only by the administrative worker."""
+    __tablename__ = 'worker_status'
+    worker_name: Mapped[str] = mapped_column(Text, primary_key=True)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    last_jobs: Mapped[dict] = mapped_column(JSONB, default=dict)

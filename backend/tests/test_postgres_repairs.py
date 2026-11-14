@@ -76,6 +76,11 @@ def test_migrations_shared_limits_bootstrap_and_concurrent_placement(monkeypatch
             await connection.execute('rollback; revoke repair_extra from lifeos_api; drop role repair_extra')
             await apply(6)
             assert await connection.fetchval("select count(*) from pg_policies where schemaname='public' and qual like '%auth.uid%'") == 0
+            await apply(7)
+            assert await connection.fetchval("select count(*) from pg_policies where tablename='suggestions'") == 1
+            assert not await connection.fetchval("select has_table_privilege('lifeos_api','worker_status','select')")
+            with pytest.raises(asyncpg.CheckViolationError):
+                await connection.execute("insert into reminders(user_id,item_type,item_id,kind,fire_at) values('x','task',gen_random_uuid(),'bogus',now())")
             engine = create_async_engine(url.replace('postgresql://', 'postgresql+asyncpg://'), connect_args={'ssl': False})
             factory = async_sessionmaker(engine, expire_on_commit=False)
             monkeypatch.setattr(db, 'SessionFactory', factory)
@@ -119,6 +124,15 @@ def test_migrations_shared_limits_bootstrap_and_concurrent_placement(monkeypatch
                     session.add(Task(user_id='user_mapped', title='forbidden'))
                     await session.flush()
                 await session.rollback()
+            # Suggestions are tenant scoped like every other LifeOS table.
+            from app.models import Suggestion
+            async with factory() as session:
+                session.info['user_id'] = owner
+                session.add(Suggestion(user_id=owner, type='pad_estimates', text='Pad study tasks', payload={}))
+                await session.commit()
+            async with factory() as session:
+                session.info['user_id'] = 'user_mapped'
+                assert not (await session.execute(select(Suggestion))).scalars().all()
             from seed_demo import build_demo, load_demo
             from datetime import date
             fixtures = build_demo('user_fresh_seed', date(2026, 11, 14))

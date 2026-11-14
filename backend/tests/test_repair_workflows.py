@@ -41,7 +41,8 @@ def test_task_mutations_priorities_reminder_completion_and_delete_undo():
         now = datetime.now(timezone.utc)
         async with factory() as session:
             # Zero work time forces calendar urgency; the old fixed 40h gives P3.
-            session.add(Preference(user_id=owner, key='focus_windows', value={'windows': [['00:00', '00:00']]}))
+            # Working hours (not focus windows) are the planning supply.
+            session.add(Preference(user_id=owner, key='work_hours', value={'start': '00:00', 'end': '00:00'}))
             task = await create_task(session, owner, TaskCreate(title='Report', deadline_at=now+timedelta(days=3)))
             assert task.priority_score >= 60
             other = await create_task(session, owner, TaskCreate(title='Review', depends_on=[task.id]))

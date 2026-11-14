@@ -33,9 +33,11 @@ async def rebuild(days: int = Query(default=7, ge=1, le=14), session: AsyncSessi
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     await session.commit()
     return {'timezone': result['timezone'],
-        'blocks': [{'task_id': str(block.task_id), 'start_at': block.start_at, 'end_at': block.end_at}
-                   for block in result['blocks']],
+        'blocks': [{'id': str(block.id), 'task_id': str(block.task_id), 'start_at': block.start_at,
+                    'end_at': block.end_at, 'status': block.status} for block in result['blocks']],
         'unplaced_task_ids': result['unplaced_task_ids'],
-        'conflicts': [{'deadline': row.deadline, 'shortfall_min': row.shortfall_min,
-                       'task_ids': row.task_ids, 'options': row.options} for row in result['conflicts']]}
+        'conflicts': [{'id': str(row.id), 'deadline': row.deadline_at, 'deadline_at': row.deadline_at,
+                       'needed_min': row.needed_min, 'free_min': row.free_min,
+                       'shortfall_min': row.needed_min - row.free_min,
+                       'task_ids': row.task_ids, 'options': row.options} for row in result['conflict_rows']]}
 
