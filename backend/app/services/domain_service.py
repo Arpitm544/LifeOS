@@ -64,6 +64,7 @@ async def sync_reminders(session, owner, row):
         fire_at = move_out_of_quiet_hours(fire_at.astimezone(tz),
             quiet_start=tuple(map(int, quiet['start'].split(':'))),
             quiet_end=tuple(map(int, quiet['end'].split(':'))), deadline=deadline.astimezone(tz))
+        fire_at = fire_at.astimezone(timezone.utc)
         if fire_at < now or fire_at in scheduled:
             continue
         scheduled.add(fire_at)
