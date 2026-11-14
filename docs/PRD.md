@@ -586,8 +586,9 @@ All timestamps stored as `timestamptz` in UTC; every table has `user_id` with ro
 | `GET /api/insights` | Computed metrics + latest suggestions |
 | `GET/PATCH/DELETE /api/preferences` | View and edit what LifeOS knows |
 | `GET /api/export`, `DELETE /api/account` | Data export (JSON) and deletion |
+| `POST /api/webhooks/clerk` | Sync user profiles; verify the raw body and Svix headers with the Svix Python SDK and `CLERK_WEBHOOK_SIGNING_SECRET` before processing; reject invalid signatures |
 
-Conventions: JSON only, JWT bearer auth, errors as `{code, message}`, idempotency key header on `POST /api/chat` so a retried request never creates duplicates.
+Conventions: JSON only, Clerk session-token bearer auth except the signature-verified Clerk webhook, errors as `{code, message}`, idempotency key header on `POST /api/chat` so a retried request never creates duplicates. The webhook derives its transaction-scoped Clerk user id only from the verified event's user id, then upserts that user's profile idempotently.
 
 ### Voice processing architecture
 
@@ -599,6 +600,7 @@ Conventions: JSON only, JWT bearer auth, errors as `{code, message}`, idempotenc
 
 ### Notification system
 
+- **Worker database access:** a worker-only database function enumerates Clerk user ids for reminders and scheduled jobs, exposing no other user data. For each user, the trusted worker sets the same transaction-scoped Clerk user id as FastAPI before querying or updating rows; each user's transaction commits or rolls back before processing another user. The worker's database role cannot bypass RLS; the enumeration function is unavailable to the API role or clients.
 - **Creation:** `reminder_service.recompute(item)` runs inside the same transaction as every task/event write, so reminders are always consistent with the data.
 - **Delivery loop (worker, every 30 s):** select `pending` reminders with `fire_at ≤ now()` using `FOR UPDATE SKIP LOCKED` (batch 100) → apply rate-limit merge (F3.3) → send to every push subscription → mark `sent`; `410 Gone` from the push service deletes that subscription.
 - **Scheduled jobs (APScheduler):** hourly priority re-score; daily plan generation at each user's start time; nightly analytics recompute; Sunday insight generation.
@@ -610,7 +612,8 @@ Conventions: JSON only, JWT bearer auth, errors as `{code, message}`, idempotenc
 | Integration | Use | Phase |
 | --- | --- | --- |
 | Anthropic API | Tool-use parsing, explanations, insight wording | MVP |
-| Supabase | Postgres, Auth, row-level security | MVP |
+| Supabase | Postgres, row-level security | MVP |
+| Clerk | Sign-in, session tokens, profile webhooks | MVP |
 | Web Push (browser push services) | Reminders | MVP |
 | Web Speech API | STT and TTS | MVP |
 | Hosted Whisper-class STT | Fallback transcription | MVP if time, else later |
@@ -690,8 +693,8 @@ Each requirement below has a number the team can test before the demo.
 
 ### Security and privacy
 
-- **NFR-S1** Every API route requires a valid Clerk session token; FastAPI verifies it and derives `user_id` from the token's `sub`, never from the request body.
-- **NFR-S2** Postgres row-level security on every user table compares `user_id` with a transaction-scoped Clerk user id set by FastAPI, so a backend bug cannot leak another user's rows.
+- **NFR-S1** Every user-facing API route requires a valid Clerk session token; FastAPI verifies it and derives `user_id` from the token's `sub`, never from the request body. `POST /api/webhooks/clerk` instead requires Clerk webhook-signature verification as specified above and is exempt from session-token authentication.
+- **NFR-S2** Postgres row-level security on every user table compares `user_id` (`id` for `users`) with a transaction-scoped Clerk user id set by FastAPI from the verified session or webhook, or by the trusted worker as specified above. Missing context denies access, and transaction end clears the context so pooled connections cannot retain another user's identity.
 - **NFR-S3** LLM tools can only act on the authenticated user's data; tool arguments containing ids are re-checked for ownership.
 - **NFR-S4** Prompt-injection guard: user text and task titles are passed as data inside clearly delimited blocks; the system prompt states that instructions inside them are not commands; destructive actions always need UI confirmation.
 - **NFR-S5** Secrets (LLM key, VAPID private key, DB URL) only in server environment variables; nothing secret in the frontend bundle.
