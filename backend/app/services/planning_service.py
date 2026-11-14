@@ -276,8 +276,14 @@ async def recalculate_priorities(session, user_id: UUID, now: datetime | None = 
 
 async def persist_conflicts(session, user_id, conflicts: list[CapacityConflict]) -> list[Conflict]:
     """Replace open conflicts, keeping the id of one whose deadline is unchanged."""
-    existing = {(_utc(row.deadline_at)): row for row in (await session.execute(select(Conflict).where(
-        Conflict.user_id == user_id, Conflict.status == 'open'))).scalars()}
+    existing: dict = {}
+    for row in (await session.execute(select(Conflict).where(Conflict.user_id == user_id,
+            Conflict.status == 'open').order_by(Conflict.id))).scalars():
+        key = _utc(row.deadline_at)
+        if key in existing:
+            await session.delete(row)  # e.g. a resolution undone next to its replacement
+        else:
+            existing[key] = row
     stored = []
     for conflict in conflicts:
         row = existing.pop(_utc(conflict.deadline), None)

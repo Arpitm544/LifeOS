@@ -89,22 +89,31 @@ async def deliver_due(factory, settings, *, now: datetime, batch_size: int = 100
         result = await send_to_subscriptions(claim.subscriptions, claim.payload, settings)
         outcomes.append((claim, result))
     sent = retry = 0
-    async with factory() as session, session.begin():
-        for claim, result in outcomes:
-            if result.gone_endpoints:
-                await session.execute(delete(PushSubscription).where(PushSubscription.user_id == claim.user_id,
-                    PushSubscription.endpoint.in_(result.gone_endpoints)))
-            if result.failed and not result.sent:
-                # Transient push failure: retry on a later cycle (still visible in-app).
-                await session.execute(update(Reminder).where(Reminder.id.in_(claim.reminder_ids),
-                    Reminder.status == 'sending').values(status='pending', sent_at=None))
-                retry += len(claim.reminder_ids)
-            else:
-                # Delivered, or no push possible: shown in the notification centre and Today (F3.5).
-                await session.execute(update(Reminder).where(Reminder.id.in_(claim.reminder_ids),
-                    Reminder.status == 'sending').values(status='sent'))
-                sent += len(claim.reminder_ids)
+    for claim, result in outcomes:
+        # One transaction per claim: a failure cannot roll back other users' 'sent'.
+        try:
+            async with factory() as session, session.begin():
+                sent_now, retry_now = await _record_outcome(session, claim, result)
+            sent, retry = sent + sent_now, retry + retry_now
+        except Exception:
+            log.exception('recording a push outcome failed; recovery retries it later')
     return {'sent': sent, 'retry': retry, **report}
+
+
+async def _record_outcome(session, claim, result) -> tuple[int, int]:
+    """Returns (sent, retried) reminder counts for one claim."""
+    if result.gone_endpoints:
+        await session.execute(delete(PushSubscription).where(PushSubscription.user_id == claim.user_id,
+            PushSubscription.endpoint.in_(result.gone_endpoints)))
+    if result.failed and not result.sent:
+        # Transient push failure: retry on a later cycle (still visible in-app).
+        await session.execute(update(Reminder).where(Reminder.id.in_(claim.reminder_ids),
+            Reminder.status == 'sending').values(status='pending', sent_at=None))
+        return 0, len(claim.reminder_ids)
+    # Delivered, or no push possible: shown in the notification centre and Today (F3.5).
+    await session.execute(update(Reminder).where(Reminder.id.in_(claim.reminder_ids),
+        Reminder.status == 'sending').values(status='sent'))
+    return len(claim.reminder_ids), 0
 
 
 async def _users_with_open_tasks(factory) -> list[str]:

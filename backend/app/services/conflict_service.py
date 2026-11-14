@@ -41,12 +41,14 @@ def extension_limit(work_end: time, quiet_start: time, quiet_end: time) -> time:
     return min(cursor, stop).time() if cursor > datetime.combine(datetime.min.date(), work_end) else work_end
 
 
-def free_destination(block: BusyBlock, deadline: datetime, busy: list[BusyBlock]) -> datetime | None:
-    """Same time of day on the first day after the deadline that is not already booked."""
+def free_destination(block: BusyBlock, deadline: datetime, busy: list[BusyBlock], zone=timezone.utc) -> datetime | None:
+    """Same local time of day on the first day after the deadline that is not already booked."""
     length = block.end - block.start
     first = (deadline - block.start).days + 1
+    local = block.start.astimezone(zone)
     for offset in range(first, first + 7):
-        start = block.start + timedelta(days=offset)
+        # Aware arithmetic in the user's zone keeps the wall-clock hour across DST.
+        start = (local + timedelta(days=offset)).astimezone(timezone.utc)
         if start < deadline:
             continue
         if not any(other.start < start + length and start < other.end for other in busy):
@@ -111,7 +113,7 @@ async def simulate_options(session, user_id, conflict: Conflict, *, now: datetim
     later = await busy_with_sources(session, user_id, deadline, deadline + timedelta(days=9), state.zone) if movable else []
     for block, source in sorted(movable, key=lambda item: -(item[0].end - item[0].start)):
         busy = [b for b, s in state.busy if not (s is source and b == block)]
-        moved_to = free_destination(block, deadline, [b for b, _ in later] + busy)
+        moved_to = free_destination(block, deadline, [b for b, _ in later] + busy, state.zone)
         if moved_to is None:
             continue  # no free slot at the same time in the week after the deadline
         busy.append(BusyBlock(moved_to, moved_to + (block.end - block.start)))

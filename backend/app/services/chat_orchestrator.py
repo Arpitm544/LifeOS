@@ -41,6 +41,10 @@ MAX_OPEN_TASKS_IN_CONTEXT = 30
 MAX_CAPACITY_DAYS = 30  # routine expansion is bounded to 31 days
 
 
+class CapacityInputError(ValueError):
+    """A hypothetical deadline the check cannot answer (past, or too far ahead)."""
+
+
 @dataclass
 class ChatContext:
     now: datetime
@@ -497,7 +501,7 @@ async def handle_check_capacity(session, user_id, ctx, args: CheckCapacityCall, 
     try:
         result = await hypothetical_capacity(session, user_id, title=args.title, effort_min=args.effort_min,
                                              deadline=args.deadline_iso, now=ctx.now)
-    except ValueError as exc:
+    except CapacityInputError as exc:
         outcome.clarify(str(exc))
         return
     when = format_local(args.deadline_iso, ctx.timezone_name)
@@ -514,9 +518,9 @@ async def hypothetical_capacity(session, user_id, *, title: str, effort_min: int
                                 now: datetime, category: str = 'other') -> dict:
     """'Can I take this on?' using real free time; nothing is saved (PRD 5.4)."""
     if deadline <= now:
-        raise ValueError('That deadline has already passed. Which future date do you mean?')
+        raise CapacityInputError('That deadline has already passed. Which future date do you mean?')
     if deadline - now > timedelta(days=MAX_CAPACITY_DAYS):
-        raise ValueError(f'I can check up to {MAX_CAPACITY_DAYS} days ahead. Is there an earlier date?')
+        raise CapacityInputError(f'I can check up to {MAX_CAPACITY_DAYS} days ahead. Is there an earlier date?')
     # The checked window must reach the deadline, or the work would look like it fits.
     days = max(1, (deadline - now).days + 1)
     state = await load_state(session, user_id, now=now, days=days)

@@ -81,6 +81,7 @@ def test_migrations_shared_limits_bootstrap_and_concurrent_placement(monkeypatch
             assert not await connection.fetchval("select has_table_privilege('lifeos_api','worker_status','select')")
             with pytest.raises(asyncpg.CheckViolationError):
                 await connection.execute("insert into reminders(user_id,item_type,item_id,kind,fire_at) values('x','task',gen_random_uuid(),'bogus',now())")
+            await connection.execute("insert into worker_status(worker_name,last_seen_at) values('repair', now())")
             engine = create_async_engine(url.replace('postgresql://', 'postgresql+asyncpg://'), connect_args={'ssl': False})
             factory = async_sessionmaker(engine, expire_on_commit=False)
             monkeypatch.setattr(db, 'SessionFactory', factory)
@@ -124,6 +125,10 @@ def test_migrations_shared_limits_bootstrap_and_concurrent_placement(monkeypatch
                     session.add(Task(user_id='user_mapped', title='forbidden'))
                     await session.flush()
                 await session.rollback()
+            # /health/worker switches to lifeos_api and reads through the definer function.
+            from app.main import worker_health
+            health = await worker_health()
+            assert health['status'] == 'ok' and health['last_seen_at'] is not None
             # Suggestions are tenant scoped like every other LifeOS table.
             from app.models import Suggestion
             async with factory() as session:

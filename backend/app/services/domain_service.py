@@ -41,7 +41,6 @@ async def sync_all_reminders(session, owner):
 
 
 async def sync_reminders(session, owner, row):
-    from .reminder_service import task_reminder_times, event_reminder_time, move_out_of_quiet_hours
     from zoneinfo import ZoneInfo
     kind = 'task' if isinstance(row, Task) else 'event'
     inactive = (kind == 'task' and row.status not in {'open', 'blocked'}) or (kind == 'event' and row.cancelled)
@@ -58,26 +57,46 @@ async def sync_reminders(session, owner, row):
         Preference.status == 'active'))).scalars().all()
     values = {item.key: item.value for item in prefs}
     tz = ZoneInfo(values.get('timezone', {}).get('name', 'UTC'))
-    quiet = values.get('quiet_hours', {'start': '22:30', 'end': '07:30'})
     now = datetime.now(timezone.utc)
     deadline = row.deadline_at if kind == 'task' else row.start_at
     if deadline is None:
         return
     deadline = deadline.replace(tzinfo=timezone.utc) if deadline.tzinfo is None else deadline
+    times = scheduled_times(values, deadline=deadline, now=now,
+                            effort_min=row.effort_est_min if kind == 'task' else None,
+                            location=row.location if kind == 'event' else None)
+    for reminder_kind, fire_at in times:
+        session.add(Reminder(user_id=owner, item_type=kind, item_id=row.id, kind=reminder_kind,
+            fire_at=fire_at, status='pending',
+            message=reminder_message(reminder_kind, row, deadline, fire_at, tz)))
+
+
+def scheduled_times(values: dict, *, deadline: datetime, now: datetime, effort_min=None, location=None):
+    """Rule-based fire times after quiet hours, past times and duplicates are removed.
+
+    `effort_min` set -> task rules; otherwise the event rule. Shared by reminder
+    creation and the preview endpoint so both always agree.
+    """
+    from .reminder_service import task_reminder_times, event_reminder_time, move_out_of_quiet_hours
+    from zoneinfo import ZoneInfo
+    tz = ZoneInfo(values.get('timezone', {}).get('name', 'UTC'))
+    quiet = values.get('quiet_hours', {'start': '22:30', 'end': '07:30'})
     lead = int(values.get('reminder_lead', {}).get('minutes', 60))
-    times = task_reminder_times(deadline=deadline, effort_min=row.effort_est_min, now=now, buffer_min=lead) if kind == 'task' else [('event', event_reminder_time(start=deadline, location=row.location))]
-    scheduled = set()
+    if effort_min is not None:
+        times = task_reminder_times(deadline=deadline, effort_min=effort_min, now=now, buffer_min=lead)
+    else:
+        times = [('event', event_reminder_time(start=deadline, location=location))]
+    output, seen = [], set()
     for reminder_kind, fire_at in times:
         fire_at = move_out_of_quiet_hours(fire_at.astimezone(tz),
             quiet_start=tuple(map(int, quiet['start'].split(':'))),
             quiet_end=tuple(map(int, quiet['end'].split(':'))), deadline=deadline.astimezone(tz))
         fire_at = fire_at.astimezone(timezone.utc)
-        if fire_at < now or fire_at in scheduled:
+        if fire_at < now or fire_at in seen:
             continue
-        scheduled.add(fire_at)
-        session.add(Reminder(user_id=owner, item_type=kind, item_id=row.id, kind=reminder_kind,
-            fire_at=fire_at.astimezone(timezone.utc), status='pending',
-            message=reminder_message(reminder_kind, row, deadline, fire_at, tz)))
+        seen.add(fire_at)
+        output.append((reminder_kind, fire_at))
+    return output
 
 
 RULE_KINDS = ('start_now', 'due_soon', 'overdue', 'event')
@@ -247,6 +266,11 @@ async def undo_logged_action(session, owner, action_id):
             await session.execute(update(Reminder).where(Reminder.user_id == owner,
                 Reminder.id == UUID(log.after['_custom_reminder_id']), Reminder.status == 'pending')
                 .values(status='cancelled'))
+    # Reminders the action moved (e.g. a reschedule) return to their prior time/state.
+    for item in log.after.get('_reminder_restore', []):
+        await session.execute(update(Reminder).where(Reminder.user_id == owner, Reminder.id == UUID(item['id']))
+            .values(fire_at=datetime.fromisoformat(item['fire_at']), status=item['status'],
+                    action_taken=item.get('action_taken')))
     log.undone_at = datetime.now(timezone.utc)
     await session.flush()
     if model is Task:

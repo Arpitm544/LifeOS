@@ -136,6 +136,7 @@ class ActualEffort(BaseModel):
 @router.post('/{task_id}/actual-effort', response_model=TaskRead)
 async def record_actual_effort(task_id: UUID, payload: ActualEffort, session: AsyncSession = Depends(get_session),
                                user_id: UUID = Depends(current_user_id)) -> Task:
+    await lock_tasks(session, user_id)
     task = await get_task(session, user_id, task_id)
     if task is None:
         raise HTTPException(status_code=404, detail='Task not found')

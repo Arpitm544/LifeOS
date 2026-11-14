@@ -29,7 +29,13 @@ async def insights(session: AsyncSession = Depends(get_session), user_id=Depends
         # Release the connection while the (optional) wording call runs.
         await session.commit()
         items = await generate_suggestions(data, configured_llm())
-        rows = await store_suggestions(session, user_id, items, now=now) if items else []
+        if session.get_bind().dialect.name == 'postgresql':
+            from sqlalchemy import text
+            await session.execute(text('SELECT pg_advisory_xact_lock(7304, hashtext(:owner))'), {'owner': str(user_id)})
+        # Re-check under the lock: a concurrent request may have stored today's batch.
+        rows = await todays_suggestions(session, user_id, now=now)
+        if rows is None:
+            rows = await store_suggestions(session, user_id, items, now=now) if items else []
     await session.commit()
     return InsightsResponse(**data, suggestions=[suggestion_out(row) for row in rows])
 

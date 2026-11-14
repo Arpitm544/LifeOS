@@ -319,7 +319,8 @@ def test_subscribe_upserts_and_moves_endpoint_to_current_user():
             await subscribe(SubscriptionIn(endpoint=endpoint, keys={'p256dh': 'e', 'auth': 'f'}), session, 'user_second')
             rows = (await session.execute(select(PushSubscription))).scalars().all()
             assert [(r.user_id, r.p256dh) for r in rows] == [('user_second', 'e')]
-        with pytest.raises(Exception):
+        from pydantic import ValidationError
+        with pytest.raises(ValidationError):
             SubscriptionIn(endpoint='https://internal.example/hook', keys={'p256dh': 'a', 'auth': 'b'})
     with_factory(body)
 
@@ -412,3 +413,139 @@ def test_calibrated_effort_feeds_priority_why():
             assert report.priority_breakdown['effort_min'] == 288  # 180 min x 1.6 study factor
             assert '1.6' in report.priority_why
     with_factory(body)
+
+
+def test_calibration_uses_only_latest_twenty_per_category():
+    async def body(factory):
+        from app.services.planning_service import calibration_factors
+        now = datetime.now(timezone.utc)
+        async with factory() as session:
+            # 10 old completions at 3x, then 20 recent at exactly 1.5x.
+            for n in range(30):
+                actual = 180 if n < 10 else 90
+                session.add(Task(user_id=OWNER, title=f'Study {n}', category='study', status='done',
+                                 effort_est_min=60, effort_actual_min=actual, created_at=now,
+                                 completed_at=now - timedelta(days=30 - n)))
+            await session.commit()
+            assert await calibration_factors(session, OWNER) == {'study': 1.5}
+    with_factory(body)
+
+
+def test_free_slots_stop_at_the_deadline():
+    async def body(factory):
+        from app.services.planning_service import next_free_slots
+        now = datetime(2026, 11, 16, 6, tzinfo=timezone.utc)
+        async with factory() as session:
+            session.add(Preference(user_id=OWNER, key='work_hours', value={'start': '09:00', 'end': '12:00'}))
+            await session.commit()
+            deadline = now.replace(hour=10)
+            slots = await next_free_slots(session, OWNER, task_id=None, duration_min=60, now=now, deadline=deadline)
+            assert slots and all(slot['end_at'] <= deadline for slot in slots)
+            assert await next_free_slots(session, OWNER, task_id=None, duration_min=90, now=now,
+                                         deadline=now.replace(hour=10)) == []
+    with_factory(body)
+
+
+def test_today_free_minutes_ignore_done_work_and_survive_bad_recurrence():
+    async def body(factory):
+        from app.api.today import free_minutes_left
+        from app.models import Event, PlanBlock
+        from zoneinfo import ZoneInfo
+        now = datetime(2026, 11, 16, 9, tzinfo=timezone.utc)
+        start, end = now.replace(hour=0), now.replace(hour=0) + timedelta(days=1)
+        values = {'work_hours': {'start': '09:00', 'end': '12:00'}}
+        async with factory() as session:
+            open_task = Task(user_id=OWNER, title='Open', created_at=now)
+            done_task = Task(user_id=OWNER, title='Done', status='done', created_at=now)
+            session.add_all([open_task, done_task])
+            await session.flush()
+            open_block = PlanBlock(user_id=OWNER, task_id=open_task.id, start_at=now, end_at=now + timedelta(hours=1), plan_date=start)
+            done_block = PlanBlock(user_id=OWNER, task_id=done_task.id, start_at=now + timedelta(hours=1),
+                                   end_at=now + timedelta(hours=2), plan_date=start)
+            session.add_all([open_block, done_block])
+            await session.commit()
+            # Today passes only blocks of still-open tasks: 180 - 60 minutes.
+            assert await free_minutes_left(session, OWNER, values, ZoneInfo('UTC'), now=now, start=start,
+                                           end=end, planned=[open_block]) == 120
+            session.add(Event(user_id=OWNER, title='Broken', start_at=now, end_at=now + timedelta(hours=1),
+                              rrule='FREQ=NONSENSE', source='manual'))
+            await session.commit()
+            assert await free_minutes_left(session, OWNER, values, ZoneInfo('UTC'), now=now, start=start,
+                                           end=end, planned=[]) is None
+    with_factory(body)
+
+
+def test_duplicate_open_conflicts_for_one_deadline_are_reconciled():
+    async def body(factory):
+        from app.services.planning_service import detect_conflicts
+        now = datetime.now(timezone.utc)
+        async with factory() as session:
+            deadline = overloaded(session, now)
+            for _ in range(2):
+                session.add(Conflict(user_id=OWNER, deadline_at=deadline, needed_min=600, free_min=10,
+                                     task_ids=[], options=[], status='open'))
+            await session.commit()
+            await detect_conflicts(session, OWNER, now=now)
+            await session.commit()
+            rows = (await session.execute(select(Conflict).where(Conflict.status == 'open'))).scalars().all()
+            assert len(rows) == 1
+    with_factory(body)
+
+
+def test_preview_matches_scheduled_reminders():
+    async def body(factory):
+        from app.api.reminders import preview
+        from app.schemas_reminders import ReminderPreviewRequest
+        now = datetime(2026, 11, 16, 9, tzinfo=timezone.utc)
+        async with factory() as session:
+            session.add(Preference(user_id=OWNER, key='quiet_hours', value={'start': '22:00', 'end': '08:00'}))
+            await session.commit()
+            # Deadline 09:00 next day, 60 min effort: start_now at 07:00 falls in quiet hours.
+            result = await preview(ReminderPreviewRequest(deadline=now + timedelta(days=1), effort_min=60, now=now),
+                                   session, OWNER)
+            times = {item['kind']: item['fire_at'] for item in result['reminders']}
+            assert times['start_now'].hour == 8  # 07:00 is in quiet hours; deadline is after them -> 08:00
+            past = await preview(ReminderPreviewRequest(deadline=now + timedelta(hours=1), effort_min=60, now=now),
+                                 session, OWNER)
+            assert all(item['fire_at'] >= now for item in past['reminders'])
+    with_factory(body)
+
+
+def test_undo_reschedule_restores_reminders():
+    async def body(factory):
+        from app.api.reminder_actions import RescheduleRequest, reminder_action, reschedule
+        from app.schemas_reminders import ReminderActionRequest
+        from app.services.domain_service import undo_logged_action
+        now = datetime.now(timezone.utc)
+        async with factory() as session:
+            session.add(Preference(user_id=OWNER, key='work_hours', value={'start': '00:00', 'end': '23:59'}))
+            task = Task(user_id=OWNER, title='Report', deadline_at=now + timedelta(days=3), effort_est_min=60, created_at=now)
+            session.add(task)
+            await session.flush()
+            reminder = Reminder(user_id=OWNER, item_type='task', item_id=task.id, kind='due_soon', fire_at=now, status='sent')
+            session.add(reminder)
+            await session.commit()
+            original = reminder.fire_at
+            offer = await reminder_action(reminder.id, ReminderActionRequest(action='reschedule'), session, OWNER)
+            moved = await reschedule(reminder.id, RescheduleRequest(start_at=offer['slots'][2]['start_at']), session, OWNER)
+            await undo_logged_action(session, OWNER, UUID(moved['action_id']))
+            await session.commit()
+            await session.refresh(reminder)
+            assert reminder.status == 'sent' and reminder.fire_at.replace(tzinfo=timezone.utc) == original.replace(tzinfo=timezone.utc)
+    with_factory(body)
+
+
+def test_routine_move_keeps_local_wall_clock_across_dst():
+    from zoneinfo import ZoneInfo
+    from app.services.conflict_service import free_destination
+    from app.services.scheduler import BusyBlock
+    zone = ZoneInfo('Europe/Berlin')  # DST ends 2026-10-25
+    start = datetime(2026, 10, 23, 7, tzinfo=zone).astimezone(timezone.utc)
+    gym = BusyBlock(start, start + timedelta(hours=1))
+    moved = free_destination(gym, datetime(2026, 10, 24, 12, tzinfo=timezone.utc), [], zone)
+    assert moved.astimezone(zone).hour == 7 and moved.astimezone(zone).date().isoformat() == '2026-10-25'
+
+
+def test_malformed_push_port_is_rejected_not_raised():
+    from app.services.push_service import allowed_endpoint
+    assert allowed_endpoint('https://fcm.googleapis.com:bad/x', ['fcm.googleapis.com']) is False

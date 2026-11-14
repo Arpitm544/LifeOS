@@ -320,6 +320,8 @@ def test_past_reminder_on_update_writes_nothing_and_undo_cancels_custom_reminder
         result = await handle_chat(session, user_id=OWNER, text='remind me in 5', client_tz='UTC', llm=llm)
         await session.commit()
         assert result['actions'][0]['action_id']  # reminder-only edits are undoable
+        pending = {r.kind for r in (await session.execute(select(Reminder).where(Reminder.status == 'pending'))).scalars()}
+        assert 'custom' in pending
         await undo_logged_action(session, OWNER, UUID(result['actions'][0]['action_id']))
         await session.commit()
         kinds = {r.kind for r in (await session.execute(select(Reminder).where(Reminder.status == 'pending'))).scalars()}

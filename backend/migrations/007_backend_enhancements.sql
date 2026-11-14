@@ -81,6 +81,18 @@ language sql security definer set search_path = pg_catalog as $$
 $$;
 revoke all on function public.prune_lifeos_history() from public;
 
+-- Supabase grants EXECUTE on new public functions to anon/authenticated by
+-- default (PostgREST could call them). Revoke where those roles exist.
+do $$ declare r text; begin
+  foreach r in array array['anon', 'authenticated'] loop
+    if exists (select 1 from pg_roles where rolname = r) then
+      execute format('revoke all on function public.claim_push_endpoint(text) from %I', r);
+      execute format('revoke all on function public.lifeos_worker_last_seen() from %I', r);
+      execute format('revoke all on function public.prune_lifeos_history() from %I', r);
+    end if;
+  end loop;
+end $$;
+
 -- The worker also runs retention nightly. When pg_cron is installed (Supabase:
 -- Database > Extensions), schedule it in the database as well.
 do $$ begin

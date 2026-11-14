@@ -41,9 +41,9 @@ def _utc(value: datetime) -> datetime:
     return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
 
 
-async def _task_for(session, user_id, reminder_id: UUID) -> tuple[Reminder, Task]:
-    reminder = (await session.execute(select(Reminder).where(Reminder.id == reminder_id,
-        Reminder.user_id == user_id).with_for_update())).scalar_one_or_none()
+async def _task_for(session, user_id, reminder_id: UUID, *, lock: bool = True) -> tuple[Reminder, Task]:
+    query = select(Reminder).where(Reminder.id == reminder_id, Reminder.user_id == user_id)
+    reminder = (await session.execute(query.with_for_update() if lock else query)).scalar_one_or_none()
     if reminder is None:
         raise HTTPException(status_code=404, detail="Reminder not found")
     if reminder.status == 'cancelled':
@@ -55,10 +55,10 @@ async def _task_for(session, user_id, reminder_id: UUID) -> tuple[Reminder, Task
     return reminder, task
 
 
-async def _next_block(session, user_id, task_id) -> PlanBlock | None:
-    return (await session.execute(select(PlanBlock).where(PlanBlock.user_id == user_id, PlanBlock.task_id == task_id,
-        PlanBlock.status == 'planned', PlanBlock.end_at > datetime.now(timezone.utc)).order_by(PlanBlock.start_at)
-        .limit(1).with_for_update())).scalar_one_or_none()
+async def _next_block(session, user_id, task_id, *, lock: bool = True) -> PlanBlock | None:
+    query = select(PlanBlock).where(PlanBlock.user_id == user_id, PlanBlock.task_id == task_id,
+        PlanBlock.status == 'planned', PlanBlock.end_at > datetime.now(timezone.utc)).order_by(PlanBlock.start_at).limit(1)
+    return (await session.execute(query.with_for_update() if lock else query)).scalar_one_or_none()
 
 
 def _block_minutes(task: Task, block: PlanBlock | None) -> int:
@@ -71,8 +71,8 @@ def _block_minutes(task: Task, block: PlanBlock | None) -> int:
 async def reminder_action(reminder_id: UUID, request: ReminderActionRequest,
                           session: AsyncSession = Depends(get_session), user_id: UUID = Depends(current_user_id)) -> dict:
     if request.action.value == 'reschedule':
-        reminder, task = await _task_for(session, user_id, reminder_id)
-        minutes = _block_minutes(task, await _next_block(session, user_id, task.id))
+        reminder, task = await _task_for(session, user_id, reminder_id, lock=False)
+        minutes = _block_minutes(task, await _next_block(session, user_id, task.id, lock=False))
         slots = await next_free_slots(session, user_id, task_id=task.id, duration_min=minutes,
                                       deadline=task.deadline_at)
         # Offering slots writes nothing; the request session closes without commit.
@@ -116,6 +116,10 @@ async def reschedule(reminder_id: UUID, request: RescheduleRequest, session: Asy
         before = snapshot(block)
         block.start_at, block.end_at, block.plan_date = start, end, plan_date
         log = await audit(session, user_id, block, before, 'update')
+    def remember(item):
+        return {'id': str(item.id), 'fire_at': _utc(item.fire_at).isoformat(), 'status': item.status,
+                'action_taken': item.action_taken}
+    restore = [remember(reminder)]
     # The moved block's own start reminder follows it.
     if old_start is not None:
         moved = (await session.execute(select(Reminder).where(Reminder.user_id == user_id,
@@ -123,8 +127,11 @@ async def reschedule(reminder_id: UUID, request: RescheduleRequest, session: Asy
             Reminder.status == 'pending', Reminder.id != reminder.id))).scalars().all()
         for item in moved:
             if _utc(item.fire_at) == old_start:
+                restore.append(remember(item))
                 item.fire_at = start
     reminder.fire_at, reminder.status, reminder.action_taken = start, 'pending', 'reschedule'
+    # Undo of this action restores the reminders too (metadata, ignored by the snapshot check).
+    log.after = {**log.after, '_reminder_restore': restore}
     await session.commit()
     return {"id": str(reminder.id), "status": reminder.status, "fire_at": reminder.fire_at,
             "plan_block": {"id": str(block.id), "start_at": block.start_at, "end_at": block.end_at},

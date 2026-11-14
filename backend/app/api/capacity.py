@@ -17,7 +17,7 @@ async def capacity_check(request: CapacityCheckRequest, user_id=Depends(current_
     Without it, run the pure Capacity Guard formula on the supplied numbers.
     """
     if request.hypothetical is not None:
-        from ..services.chat_orchestrator import hypothetical_capacity
+        from ..services.chat_orchestrator import CapacityInputError, hypothetical_capacity
         item = request.hypothetical
         now = datetime.now(timezone.utc)
         if item.deadline <= now:
@@ -27,7 +27,7 @@ async def capacity_check(request: CapacityCheckRequest, user_id=Depends(current_
             try:
                 return await hypothetical_capacity(session, user_id, title=item.title, effort_min=item.effort_min,
                                                    deadline=item.deadline, now=now, category=item.category.value)
-            except ValueError as exc:
+            except CapacityInputError as exc:
                 raise HTTPException(status_code=422, detail=str(exc)) from exc
     conflicts = check_capacity(
         tasks=[CapacityTask(item.id, item.title, item.effort_min, item.deadline, item.priority_score, item.flexible) for item in request.tasks],

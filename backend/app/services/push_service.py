@@ -21,9 +21,13 @@ class PushResult:
 
 def allowed_endpoint(endpoint: str, allowed_hosts: list[str]) -> bool:
     """Only browser push services may receive requests (prevents SSRF)."""
-    parts = urlsplit(endpoint)
-    host = (parts.hostname or '').lower()
-    if parts.scheme != 'https' or not host or parts.port not in (None, 443):
+    try:
+        parts = urlsplit(endpoint)
+        host = (parts.hostname or '').lower()
+        port = parts.port
+    except ValueError:  # malformed URL or port
+        return False
+    if parts.scheme != 'https' or not host or port not in (None, 443):
         return False
     return any(host == allowed or host.endswith('.' + allowed) for allowed in allowed_hosts)
 
@@ -50,7 +54,9 @@ def _send_one(subscription, payload: dict, settings) -> int:
         return 201
     except WebPushException as exc:
         return getattr(exc.response, 'status_code', 500) or 500
-    except Exception:  # network errors, timeouts: retryable
+    except Exception as exc:  # network errors, timeouts: retried; config errors show in the log
+        # Type only: request errors embed the endpoint URL in their message.
+        log.warning('web push raised %s', type(exc).__name__)
         return 599
 
 
@@ -61,7 +67,9 @@ async def send_to_subscriptions(subscriptions, payload: dict, settings) -> PushR
     sent, failed, gone, statuses = 0, 0, [], []
     for subscription in subscriptions:
         if not allowed_endpoint(subscription.endpoint, allowed):
-            gone.append(subscription.endpoint)  # never call a non-push host; drop the row
+            # Never call a non-push host, but keep the row: the allowlist may differ
+            # between API and worker environments or change later.
+            log.warning('skipped push to a host outside PUSH_ALLOWED_HOSTS')
             continue
         status = await asyncio.to_thread(_send_one, subscription, payload, settings)
         statuses.append(status)
