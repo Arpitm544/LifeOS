@@ -11,8 +11,15 @@ export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const { preferences, notice, notify } = useWorkspace();
   const [date, setDate] = useState("");
-  const current = links.find(([, href]) => pathname === href)?.[0] ?? "Today";
-  useEffect(() => { setDate(new Intl.DateTimeFormat("en-IN", { weekday: "long", day: "numeric", month: "short", year: "numeric", timeZone: preferences.timezone }).format(new Date())); }, [preferences.timezone]);
+  const current = links.find(([, href]) => pathname === href)?.[0] ?? "Not found";
+  useEffect(() => {
+    const formatter = new Intl.DateTimeFormat("en-IN", { weekday: "long", day: "numeric", month: "short", year: "numeric", timeZone: preferences.timezone });
+    const update = () => setDate(formatter.format(new Date()));
+    update();
+    const timer = window.setInterval(update, 60_000);
+    document.addEventListener("visibilitychange", update);
+    return () => { window.clearInterval(timer); document.removeEventListener("visibilitychange", update); };
+  }, [preferences.timezone]);
   const initials = preferences.name.trim().split(/\s+/).slice(0, 2).map(n => n[0]).join("");
 
   return <>
@@ -25,7 +32,7 @@ export function AppShell({ children }: { children: ReactNode }) {
     </aside>
     <header className="mobile-header"><Link href="/today" className="brand">◉ LifeOS</Link><Link href="/profile" className="avatar" aria-label="Your profile">{initials}</Link></header>
     <div className="workspace">
-      <header className="topbar"><span>Workspace <span className="slash">/</span> {current}</span><span>{date} <span className="slash">·</span> {preferences.timezone}</span><Link href="/tasks" className="search-link"><span aria-hidden="true">⌕</span> Search tasks <kbd>/</kbd></Link></header>
+      <header className="topbar"><span>Workspace <span className="slash">/</span> {current}</span><span>{date} <span className="slash">·</span> {preferences.timezone}</span><Link href="/tasks" className="search-link"><span aria-hidden="true">⌕</span> Search tasks</Link></header>
       <main id="main">{children}</main>
       <footer className="workspace-footer"><span>Life, with a little more space.</span><span className="demo-label"><i /> Frontend preview · Sample data</span></footer>
     </div>

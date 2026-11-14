@@ -10,7 +10,7 @@ npm ci
 npm run dev
 ```
 
-Open http://127.0.0.1:3000. Node 22 or newer is recommended; tests use Node's TypeScript stripping support.
+Open http://127.0.0.1:3000. Node 22.6 or newer is required; tests use Node's TypeScript stripping support.
 
 ```sh
 npm run typecheck
@@ -53,5 +53,7 @@ No authentication, API, database, reminder worker, AI provider, or calendar inte
 `WorkspaceProvider` currently owns browser-local mutations. Replace these actions with authenticated backend calls when endpoints are available. The planned chat endpoint is `POST /api/chat` with `{ text, source: "text" | "voice", client_tz }` and a Clerk session bearer token; follow `docs/PRD.md` for the full backend response contract. Keep token acquisition at that integration boundary.
 
 All scheduling, capacity and historical analytics shown are labeled sample data. Applying estimate padding saves a preference; it does not claim to recalculate a real plan. P1–P3 badges in this frontend preview use the selected importance; the backend priority engine will supply actual scores.
+
+Task creation and chat require localhost or HTTPS for browser-generated IDs. Working and focus windows currently must stay within one day; quiet hours may span midnight. Sample task deadlines are fixed in November 2026 and remain overdue after those dates.
 
 Voice needs browser support and microphone permission; use localhost or HTTPS. System reduced-motion preferences and the Profile toggle disable animation. The three Figma SVGs retain their source geometry and render in their original Today, voice and Profile slots; animation is applied to their wrapper.

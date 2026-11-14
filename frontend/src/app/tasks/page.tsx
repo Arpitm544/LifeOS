@@ -5,7 +5,7 @@ import { PageHeading } from "@/components/layout/page-heading";
 import { useWorkspace } from "@/components/providers/workspace-provider";
 import { TaskCard } from "@/components/tasks/task-card";
 import { TaskForm } from "@/components/tasks/task-form";
-import { filterTasks, type TaskFilter } from "@/lib/task-utils";
+import { compareDeadlines, filterTasks, type TaskFilter } from "@/lib/task-utils";
 import type { Task } from "@/lib/types";
 
 const filters: [TaskFilter, string][] = [["all", "All tasks"], ["today", "Today"], ["upcoming", "Upcoming"], ["completed", "Completed"]];
@@ -31,7 +31,7 @@ export default function TasksPage() {
   useEffect(() => { if (editing) dialog.current?.showModal(); }, [editing]);
   function close() { dialog.current?.close(); setEditing(undefined); setConfirmDelete(false); }
   const visible = filterTasks(tasks, filter, query, preferences.timezone);
-  const first = visible.filter(t => !!t.deadline);
+  const first = visible.filter(t => !!t.deadline).sort(compareDeadlines);
   const later = visible.filter(t => !t.deadline);
 
   return <>
@@ -46,7 +46,7 @@ export default function TasksPage() {
       </section>
       <aside className="panel"><TaskForm /></aside>
     </div>
-    <dialog ref={dialog} className="task-dialog" onCancel={close} onClose={() => { setEditing(undefined); setConfirmDelete(false); }}><button className="dialog-close" onClick={close} aria-label="Close task editor">×</button>
+    <dialog aria-label="Edit task" ref={dialog} className="task-dialog" onCancel={close} onClose={() => { setEditing(undefined); setConfirmDelete(false); }}><button className="dialog-close" onClick={close} aria-label="Close task editor">×</button>
       {editing ? <><TaskForm key={editing.id} task={editing} onDone={close} /><div className="delete-area">{confirmDelete ? <><p>Delete this task? This cannot be undone.</p><button className="button danger" onClick={() => { deleteTask(editing.id); close(); }}>Yes, delete task</button><button className="text-button" onClick={() => setConfirmDelete(false)}>Keep task</button></> : <button className="text-button danger-text" onClick={() => setConfirmDelete(true)}>Delete task</button>}</div></> : null}
     </dialog>
   </>;

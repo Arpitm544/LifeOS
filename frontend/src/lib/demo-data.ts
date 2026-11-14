@@ -1,7 +1,7 @@
 import type { Preferences, Task } from "./types";
 
 export const defaultPreferences: Preferences = {
-  name: "Arpit Maurya", timezone: "Asia/Kolkata", workStart: "09:00", workEnd: "18:00",
+  name: "Demo User", timezone: "Asia/Kolkata", workStart: "09:00", workEnd: "18:00",
   quietStart: "22:30", quietEnd: "07:30", focusStart: "09:00", focusEnd: "11:00",
   protectedEvenings: true, estimatePadding: false, reducedMotion: false,
 };
