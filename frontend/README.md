@@ -48,6 +48,7 @@ tests/                    # API client, validation, timezone filters and prefere
 - Tasks, preferences, routines, Today and Insights are loaded from and saved to the backend API. Chat requests go to the API, but the conversation on screen is kept only for the current visit.
 - Timezone, work/focus/quiet hours, reminder lead, estimate padding and a per-device reduced-motion setting.
 - Chat calls `POST /api/chat` and shows action cards with Undo, clarification and confirmation chips.
+- Chat supports microphone transcription and spoken replies through authenticated Deepgram routes when `DEEPGRAM_API_KEY` is configured.
 
 ## Backend
 
