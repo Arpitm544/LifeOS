@@ -30,6 +30,7 @@ from .api.tasks import router as tasks_router
 from .api.task_batches import router as task_batches_router
 from .api.push import router as push_router
 from .api.account import router as account_router
+from .api.imports import router as imports_router
 from .config import get_settings
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -51,6 +52,7 @@ app.include_router(today_router)
 app.include_router(conflicts_router)
 app.include_router(push_router)
 app.include_router(account_router)
+app.include_router(imports_router)
 # Added last so it wraps everything: browser preflight requests are answered here,
 # before authentication and rate limiting, and handled error responses (401, 429,
 # HTTPException) keep CORS headers. An unhandled 500 does not.
