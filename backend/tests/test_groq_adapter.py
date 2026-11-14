@@ -80,3 +80,51 @@ def test_provider_retries_once(monkeypatch, client_type, status):
         assert requests[0].headers['anthropic-version'] == '2023-06-01'
     else:
         assert requests[0].headers['Authorization'] == 'Bearer test-only-key'
+
+
+def _settings(**values):
+    return SimpleNamespace(llm_timeout_seconds=8, **values)
+
+
+@pytest.mark.parametrize('values,provider,url_part,model', [
+    ({'xai_api_key': 'k'}, 'XAI', 'api.x.ai', 'grok-4'),
+    ({'openai_api_key': 'k', 'openai_model': 'gpt-x'}, 'Openai', 'api.openai.com', 'gpt-x'),
+    ({'gemini_api_key': 'k'}, 'Gemini', 'generativelanguage.googleapis.com', 'gemini-2.5-flash'),
+    ({'openrouter_api_key': 'k'}, 'Openrouter', 'openrouter.ai', 'openai/gpt-4o-mini'),
+    ({'llm_api_key': 'k', 'llm_base_url': 'http://localhost:11434/v1', 'llm_model': 'llama3'}, 'Custom',
+     'localhost:11434/v1/chat/completions', 'llama3'),
+])
+def test_any_provider_key_selects_a_chat_client(monkeypatch, values, provider, url_part, model):
+    from app import config
+    monkeypatch.setattr(config, 'get_settings', lambda: _settings(**values))
+    client = llm_client.configured_llm()
+    assert isinstance(client, llm_client.OpenAICompatibleLLMClient)
+    assert client.provider == provider and url_part in client.url and client.model == model
+
+
+def test_anthropic_key_and_no_key(monkeypatch):
+    from app import config
+    monkeypatch.setattr(config, 'get_settings', lambda: _settings(anthropic_api_key='k'))
+    assert type(llm_client.configured_llm()) is llm_client.AnthropicLLMClient
+    monkeypatch.setattr(config, 'get_settings', lambda: _settings())
+    assert isinstance(llm_client.configured_llm(), llm_client.FallbackLLMClient)
+    # A custom key without an endpoint and model is not usable.
+    monkeypatch.setattr(config, 'get_settings', lambda: _settings(llm_api_key='k'))
+    assert isinstance(llm_client.configured_llm(), llm_client.FallbackLLMClient)
+
+
+def test_llm_provider_overrides_auto_order(monkeypatch):
+    from app import config
+    both = dict(groq_api_key='g', xai_api_key='x')
+    monkeypatch.setattr(config, 'get_settings', lambda: _settings(**both))
+    assert llm_client.configured_llm().provider == 'Groq'
+    monkeypatch.setattr(config, 'get_settings', lambda: _settings(llm_provider='grok', **both))
+    assert llm_client.configured_llm().provider == 'XAI'
+    monkeypatch.setattr(config, 'get_settings', lambda: _settings(llm_provider='nope', **both))
+    with pytest.raises(ValueError, match='Unknown LLM_PROVIDER'):
+        llm_client.configured_llm()
+
+
+@pytest.mark.parametrize('raw,expected', [('{"title":"A"}', {'title': 'A'}), ('', {}), (None, {}), ({'title': 'B'}, {'title': 'B'})])
+def test_tool_arguments_are_normalised(raw, expected):
+    assert llm_client.GroqLLMClient('k', 'm')._arguments(raw) == expected

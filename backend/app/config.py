@@ -1,6 +1,6 @@
 from functools import lru_cache
 from pathlib import Path
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
@@ -19,8 +19,22 @@ class Settings(BaseSettings):
     # Comma-separated browser origins allowed to call the API (the Next.js app).
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
     anthropic_api_key: str = ""
+    # Chat model. Set any one provider key (or LLM_PROVIDER to force a choice); see services/llm_client.py.
+    llm_provider: str = ""
     groq_api_key: str = ""
     groq_model: str = "openai/gpt-oss-20b"
+    xai_api_key: str = Field(default="", validation_alias=AliasChoices("xai_api_key", "grok_api_key"))
+    xai_model: str = ""
+    openai_api_key: str = ""
+    openai_model: str = ""
+    gemini_api_key: str = Field(default="", validation_alias=AliasChoices("gemini_api_key", "google_api_key"))
+    gemini_model: str = ""
+    openrouter_api_key: str = ""
+    openrouter_model: str = ""
+    # Any other OpenAI-compatible endpoint (Ollama, Together, vLLM...): all three are required.
+    llm_api_key: str = ""
+    llm_base_url: str = ""
+    llm_model: str = ""
     anthropic_model: str = "claude-sonnet-5-5"
     anthropic_insight_model: str = "claude-haiku-5-5"
     llm_timeout_seconds: float = Field(default=8.0, gt=0, le=60)
