@@ -34,7 +34,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         setTasks(saved.tasks); setPreferences(saved.preferences);
       } catch {
         canPersist.current = false;
-        notify("Saved data could not be loaded. The current session is shown; the original data has not been overwritten.");
+        notify("Saved data could not be loaded. This session starts empty; the original data has not been overwritten.");
       }
     }
     load();
