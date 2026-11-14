@@ -42,7 +42,15 @@ create policy rate_limit_owner on rate_limit_events
 grant select,insert,delete on rate_limit_events to lifeos_api;
 create function public.prune_rate_limit_events() returns void
 language sql security definer set search_path = pg_catalog as $$
-  delete from public.rate_limit_events where occurred_at <= clock_timestamp() - interval '60 seconds';
+  with expired as (
+    select ctid from public.rate_limit_events
+    where occurred_at <= clock_timestamp() - interval '60 seconds'
+    order by occurred_at
+    limit 1000
+  )
+  delete from public.rate_limit_events r
+  using expired
+  where r.ctid = expired.ctid;
 $$;
 revoke all on function public.prune_rate_limit_events() from public;
 grant execute on function public.prune_rate_limit_events() to lifeos_api;
