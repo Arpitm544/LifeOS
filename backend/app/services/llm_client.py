@@ -161,9 +161,65 @@ class AnthropicLLMClient:
         return '\n'.join(item['text'] for item in data['content'] if item['type'] == 'text').strip()
 
 
+class GroqLLMClient(AnthropicLLMClient):
+    """Groq Cloud chat completions using the same validated local tools."""
+
+    async def _post(self, body: dict) -> dict:
+        import httpx
+        deadline = time.monotonic() + self.timeout_seconds
+        last_error: Exception | None = None
+        for attempt in range(2):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0.5:
+                break
+            try:
+                async with httpx.AsyncClient(timeout=remaining) as client:
+                    response = await asyncio.wait_for(client.post(
+                        'https://api.groq.com/openai/v1/chat/completions',
+                        headers={'Authorization': 'Bearer ' + self.api_key}, json=body), timeout=remaining)
+                if response.status_code in {429, 500, 502, 503, 504} and attempt == 0:
+                    last_error = httpx.HTTPStatusError('retryable', request=response.request, response=response)
+                    continue
+                response.raise_for_status()
+                return response.json()
+            except (httpx.TimeoutException, httpx.TransportError, asyncio.TimeoutError) as exc:
+                last_error = exc
+        raise LLMUnavailable(str(last_error or 'timeout'))
+
+    async def parse(self, *, text: str, context: dict, history: list[dict] | None = None) -> LLMResponse:
+        started = time.monotonic()
+        messages = [{'role': 'system', 'content': SYSTEM_PROMPT}]
+        for turn in (history or [])[-6:]:
+            if turn.get('text') and turn.get('role') in {'user', 'assistant'}:
+                messages.append({'role': turn['role'], 'content': turn['text']})
+        messages.append({'role': 'user', 'content': '<user_data>\n' + render_context(context) +
+            '\n</user_data>\n\nMessage:\n<user_data>' + text + '</user_data>'})
+        tools = [{'type': 'function', 'function': {'name': item['name'],
+            'description': item.get('description', ''), 'parameters': item['input_schema']}}
+            for item in tool_definitions()]
+        data = await self._post({'model': self.model, 'messages': messages, 'tools': tools,
+            'tool_choice': 'auto', 'temperature': 0, 'max_tokens': 1024})
+        message = data['choices'][0]['message']
+        calls = [ToolCall(name=item['function']['name'],
+            arguments=json.loads(item['function']['arguments'])) for item in message.get('tool_calls') or []]
+        usage = data.get('usage') or {}
+        return LLMResponse(message.get('content') or '', calls,
+            int(usage.get('prompt_tokens', 0)), int(usage.get('completion_tokens', 0)),
+            int((time.monotonic() - started) * 1000), self.model)
+
+    async def write(self, *, system: str, payload: dict) -> str:
+        data = await self._post({'model': self.insight_model, 'temperature': 0.4, 'max_tokens': 600,
+            'messages': [{'role': 'system', 'content': system},
+                {'role': 'user', 'content': json.dumps(payload, default=str)}]})
+        return data['choices'][0]['message'].get('content') or ''
+
+
 def configured_llm():
     from ..config import get_settings
     settings = get_settings()
+    if getattr(settings, 'groq_api_key', ''):
+        return GroqLLMClient(settings.groq_api_key, settings.groq_model,
+                             timeout_seconds=settings.llm_timeout_seconds)
     if not getattr(settings, 'anthropic_api_key', ''):
         return FallbackLLMClient()
     return AnthropicLLMClient(settings.anthropic_api_key, settings.anthropic_model,

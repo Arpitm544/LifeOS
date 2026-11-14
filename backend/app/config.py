@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     # Comma-separated browser origins allowed to call the API (the Next.js app).
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
     anthropic_api_key: str = ""
+    groq_api_key: str = ""
+    groq_model: str = "openai/gpt-oss-20b"
     anthropic_model: str = "claude-sonnet-5-5"
     anthropic_insight_model: str = "claude-haiku-5-5"
     llm_timeout_seconds: float = Field(default=8.0, gt=0, le=60)

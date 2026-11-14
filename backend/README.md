@@ -1,5 +1,10 @@
 # LifeOS backend
 
+Groq Cloud can be used for chat and insight wording by setting `GROQ_API_KEY` and
+optionally `GROQ_MODEL` in the server environment. When configured, Groq takes
+precedence over Anthropic; the same backend validators execute all tool calls.
+Keep API keys out of Git and browser bundles.
+
 This service follows the PRD boundary: the LLM may interpret language and write replies, while backend code owns dates, validation, priorities, schedules, capacity checks, reminders, and state changes.
 
 ## What the API does
