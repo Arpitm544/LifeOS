@@ -648,3 +648,30 @@ html[data-theme="dark"] .auth-story::before { background: radial-gradient(ellips
 }
 @media (prefers-reduced-motion: reduce) { .auth-story *, .auth-story *::before, .auth-story *::after { animation: none !important; transition: none !important; } }
 html[data-reduced-motion="true"] .auth-story *, html[data-reduced-motion="true"] .auth-story *::before, html[data-reduced-motion="true"] .auth-story *::after { animation: none !important; transition: none !important; }
+
+/* Syllabus import */
+.import-panel { display: grid; gap: 18px; max-width: 920px; }
+.import-panel h2 { font-size: 20px; }
+.drop-zone { display: grid; justify-items: center; gap: 8px; padding: 28px 18px; border: 1.5px dashed var(--color-line); border-radius: 16px; background: var(--color-bg); color: var(--color-muted); text-align: center; font-size: 12px; }
+.drop-zone.has-file { border-color: var(--color-blue); color: var(--color-ink); }
+.drop-zone .text-button { display: inline; padding: 0; color: var(--color-blue); }
+.import-text { display: block; color: var(--color-muted); font-size: 11px; font-weight: 550; }
+.import-text textarea { display: block; width: 100%; margin-top: 8px; padding: 12px 13px; border: 1px solid transparent; border-radius: 13px; background: var(--color-bg); color: var(--color-ink); font: inherit; font-size: 12px; resize: vertical; }
+.import-text textarea:focus, .import-fields input:focus, .import-fields select:focus { border-color: var(--color-blue); outline: none; box-shadow: 0 0 0 3px #345cf415; }
+.import-note { font-size: 12px; }
+.import-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.import-list li { display: grid; grid-template-columns: auto 1fr; gap: 12px; align-items: start; padding: 14px; border: 1px solid var(--color-line); border-radius: 14px; background: var(--color-paper); }
+.import-list li.unselected { opacity: .55; }
+.import-list li > input[type="checkbox"] { margin-top: 12px; width: 18px; height: 18px; accent-color: var(--color-blue); }
+.import-fields { display: grid; gap: 8px; min-width: 0; }
+.import-fields input, .import-fields select { min-height: 38px; padding: 8px 10px; border: 1px solid transparent; border-radius: 10px; background: var(--color-bg); color: var(--color-ink); font: inherit; font-size: 12px; }
+.import-title { width: 100%; font-weight: 600; font-size: 13px !important; }
+.import-meta { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; }
+.import-meta label { display: grid; gap: 4px; color: var(--color-muted); font-size: 11px; font-weight: 550; }
+.import-meta input[type="number"] { width: 90px; }
+.import-meta .chip { cursor: default; text-transform: capitalize; align-self: center; }
+.import-source { font-style: italic; overflow-wrap: anywhere; }
+.import-actions { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 14px; }
+.import-plan { display: inline-flex; gap: 8px; align-items: center; font-size: 12px; color: var(--color-ink); }
+.import-plan input { accent-color: var(--color-blue); }
+@media (max-width: 640px) { .import-meta label, .import-meta input[type="datetime-local"] { width: 100%; } }

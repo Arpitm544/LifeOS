@@ -90,6 +90,7 @@ export function ChatWorkspace() {
     {voiceOutput.url ? <audio ref={voiceOutput.element} src={voiceOutput.url} autoPlay onPlay={() => voiceOutput.setPlaying(true)} onEnded={voiceOutput.stop} onError={() => { voiceOutput.stop(); setVoiceError("Could not play the spoken reply."); }} /> : null}
   </div><aside className="side-stack">
       <section className="panel prompts"><h2 className="eyebrow muted">Try asking</h2>{prompts.map(prompt => <button key={prompt} disabled={sending || voiceInput.listening || voiceInput.processing} onClick={() => { setText(prompt); input.current?.focus(); }}>“{prompt}” <span aria-hidden="true">→</span></button>)}</section>
+      <section className="panel chat-help"><h2 className="eyebrow muted">Have a syllabus?</h2><p>Upload it and LifeOS adds every deadline and plans the time. <Link className="text-button" href="/import">Import a syllabus <span aria-hidden="true">→</span></Link></p></section>
       <section className="panel chat-help"><h2 className="eyebrow muted">Good to know</h2><p>Deletes and changes to more than three items ask you first. Reply with the buttons or type “yes” or “no”.</p><p>Messages on this screen clear when you leave it. Your tasks, events and preferences are saved to your account.</p></section>
     </aside></div>;
 }

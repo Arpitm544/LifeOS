@@ -75,6 +75,9 @@ class FallbackLLMClient:
     async def write(self, *, system: str, payload: dict) -> str:
         raise LLMUnavailable('No language model configured')
 
+    async def call_tool(self, *, system: str, text: str, tool: dict, max_tokens: int = 4096) -> dict:
+        raise LLMUnavailable('No language model configured')
+
 
 def render_context(context: dict) -> str:
     lines = [f"now_local: {context.get('now_local', context.get('now', ''))}",
@@ -160,6 +163,17 @@ class AnthropicLLMClient:
         return LLMResponse(reply, calls, int(usage.get('input_tokens', 0)), int(usage.get('output_tokens', 0)),
                            int((time.monotonic() - started) * 1000), self.model)
 
+    async def call_tool(self, *, system: str, text: str, tool: dict, max_tokens: int = 4096) -> dict:
+        """Force one call of `tool` ({name, description, input_schema}) and return its arguments."""
+        body = {'model': self.model, 'max_tokens': max_tokens, 'temperature': 0, 'system': system,
+                'messages': [{'role': 'user', 'content': '<user_data>\n' + text + '\n</user_data>'}],
+                'tools': [tool], 'tool_choice': {'type': 'tool', 'name': tool['name']}}
+        data = await self._post(body)
+        for item in data.get('content') or []:
+            if item.get('type') == 'tool_use' and item.get('name') == tool['name'] and isinstance(item.get('input'), dict):
+                return item['input']
+        raise ValueError('The model did not return the requested tool call')
+
     async def write(self, *, system: str, payload: dict) -> str:
         """Wording-only call (insights, explanations) at temperature 0.4."""
         body = {'model': self.insight_model, 'max_tokens': 600, 'temperature': 0.4, 'system': system,
@@ -223,6 +237,19 @@ class OpenAICompatibleLLMClient(AnthropicLLMClient):
         return LLMResponse(message.get('content') or '', calls,
             int(usage.get('prompt_tokens', 0)), int(usage.get('completion_tokens', 0)),
             int((time.monotonic() - started) * 1000), self.model)
+
+    async def call_tool(self, *, system: str, text: str, tool: dict, max_tokens: int = 4096) -> dict:
+        data = await self._post({'model': self.model, 'temperature': 0, 'max_tokens': max_tokens,
+            'messages': [{'role': 'system', 'content': system},
+                {'role': 'user', 'content': '<user_data>\n' + text + '\n</user_data>'}],
+            'tools': [{'type': 'function', 'function': {'name': tool['name'],
+                'description': tool.get('description', ''), 'parameters': tool['input_schema']}}],
+            'tool_choice': {'type': 'function', 'function': {'name': tool['name']}}})
+        for item in self._message(data).get('tool_calls') or []:
+            function = item.get('function') or {}
+            if function.get('name') == tool['name']:
+                return self._arguments(function.get('arguments'))
+        raise ValueError(f'{self.provider} did not return the requested tool call')
 
     async def write(self, *, system: str, payload: dict) -> str:
         data = await self._post({'model': self.insight_model, 'temperature': 0.4, 'max_tokens': 600,
