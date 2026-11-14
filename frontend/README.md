@@ -22,10 +22,11 @@ npm run build
 
 ```text
 src/
-  app/(workspace)/        # Protected routes: today, chat, tasks, insights, profile
-  app/sign-in/            # Public Clerk sign-in
-  app/sign-up/            # Public Clerk sign-up
-    globals.css           # Shared tokens, component styling, responsive layouts
+  app/
+    (workspace)/        # Protected routes: today, chat, tasks, insights, profile
+    sign-in/             # Public Clerk sign-in
+    sign-up/             # Public Clerk sign-up
+    globals.css          # Shared tokens, component styling, responsive layouts
   components/
     layout/               # App shell, desktop/mobile navigation, page heading
     tasks/                # Task cards and create/edit form
