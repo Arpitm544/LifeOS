@@ -42,7 +42,7 @@ class AnthropicLLMClient:
                 headers={'x-api-key': self.api_key, 'anthropic-version': '2023-06-01'},
                 json={'model': self.model, 'max_tokens': 1024,
                     'system': 'Help manage tasks. Use create_task only for an explicit task request. '
-                              'Ask for clarification when needed. Context: ' + json.dumps(context),
+                              'Ask for clarification when needed. For deadlines, always include both deadline_iso and the exact user wording in deadline_phrase. Context: ' + json.dumps(context),
                     'messages': [{'role': 'user', 'content': text}],
                     'tools': [{'name': 'create_task', 'description': 'Create a requested task',
                                'input_schema': CreateTaskCall.model_json_schema()}]})
