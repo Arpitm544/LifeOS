@@ -1,0 +1,41 @@
+<svg preserveAspectRatio="none" overflow="visible" style="display: block;" width="190" height="190" viewBox="0 0 190 190" fill="none" xmlns="http://www.w3.org/2000/svg">
+<g id="3D / orbital assistant">
+<g clip-path="url(#clip0_0_10)">
+<g id="Sculpted blue sphere" filter="url(#filter0_d_0_10)">
+<circle cx="95" cy="89.3" r="64.6" fill="url(#paint0_radial_0_10)"/>
+</g>
+<mask id="stroke0_0_10" fill="white">
+<path d="M159.707 158.544C154.204 172.165 113.462 168.549 68.7068 150.467C23.9519 132.385 -7.8678 106.684 -2.36454 93.0631C3.13873 79.442 43.881 83.0585 88.6359 101.141C133.391 119.223 165.21 144.923 159.707 158.544Z"/>
+</mask>
+<path id="Orbital ring 0" d="M159.707 158.544C154.204 172.165 113.462 168.549 68.7068 150.467C23.9519 132.385 -7.8678 106.684 -2.36454 93.0631C3.13873 79.442 43.881 83.0585 88.6359 101.141C133.391 119.223 165.21 144.923 159.707 158.544Z" stroke-width="2" stroke="#7597FF" stroke-opacity="0.65" mask="url(#stroke0_0_10)"/>
+<mask id="stroke1_0_10" fill="white">
+<path d="M172.092 107.002C170.811 125.321 134.132 137.679 90.1668 134.605C46.2018 131.53 11.5996 114.188 12.8806 95.869C14.1616 77.5503 50.8407 65.1922 94.8056 68.2666C138.771 71.3409 173.373 88.6834 172.092 107.002Z"/>
+</mask>
+<path id="Orbital ring 1" d="M172.092 107.002C170.811 125.321 134.132 137.679 90.1668 134.605C46.2018 131.53 11.5996 114.188 12.8806 95.869C14.1616 77.5503 50.8406 65.1922 94.8056 68.2666C138.771 71.3409 173.373 88.6834 172.092 107.002Z" stroke-width="6" stroke="#B9CFFF" stroke-opacity="0.65" mask="url(#stroke1_0_10)"/>
+<mask id="stroke2_0_10" fill="white">
+<path d="M172.563 60.7813C177.894 82.1629 150.851 107.316 112.161 116.963C73.4702 126.609 37.7837 117.096 32.4527 95.7148C27.1217 74.3332 54.1648 49.1799 92.8553 39.5332C131.546 29.8866 167.232 39.3997 172.563 60.7813Z"/>
+</mask>
+<path id="Orbital ring 2" d="M172.563 60.7813C177.894 82.1629 150.851 107.316 112.161 116.963C73.4702 126.609 37.7837 117.096 32.4527 95.7148C27.1217 74.3332 54.1648 49.1799 92.8553 39.5332C131.546 29.8866 167.232 39.3997 172.563 60.7813Z" stroke-width="2" stroke="#7597FF" stroke-opacity="0.65" mask="url(#stroke2_0_10)"/>
+</g>
+</g>
+<defs>
+<filter id="filter0_d_0_10" x="2.4" y="16.7" width="205.2" height="205.2" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+<feFlood flood-opacity="0" result="BackgroundImageFix"/>
+<feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"/>
+<feOffset dx="10" dy="30"/>
+<feGaussianBlur stdDeviation="19"/>
+<feColorMatrix type="matrix" values="0 0 0 0 0.13 0 0 0 0 0.25 0 0 0 0 0.75 0 0 0 0.24 0"/>
+<feBlend mode="normal" in2="BackgroundImageFix" result="effect1_dropShadow_0_10"/>
+<feBlend mode="normal" in="SourceGraphic" in2="effect1_dropShadow_0_10" result="shape"/>
+</filter>
+<radialGradient id="paint0_radial_0_10" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(77.4784 97.2644) rotate(20.556) scale(75.6086)">
+<stop stop-color="#E0F5FF"/>
+<stop offset="0.24" stop-color="#7AB8FF"/>
+<stop offset="0.55" stop-color="#2E59F2"/>
+<stop offset="1" stop-color="#0A145C"/>
+</radialGradient>
+<clipPath id="clip0_0_10">
+<rect width="190" height="190" rx="95" fill="white"/>
+</clipPath>
+</defs>
+</svg>
