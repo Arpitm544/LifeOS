@@ -8,7 +8,10 @@ test("upload kind accepts PDFs and text files under 8 MB", () => {
   assert.deepEqual(uploadKind({ name: "CS101.PDF", type: "", size: 1000 }), { kind: "pdf" });
   assert.deepEqual(uploadKind({ name: "notes.txt", type: "text/plain", size: 10 }), { kind: "text" });
   assert.ok("error" in uploadKind({ name: "a.pdf", type: "application/pdf", size: 9 * 1024 * 1024 }));
-  assert.ok("error" in uploadKind({ name: "photo.png", type: "image/png", size: 10 }));
+  assert.deepEqual(uploadKind({ name: "photo.png", type: "image/png", size: 10 }), { kind: "image" });
+  assert.deepEqual(uploadKind({ name: "IMG_0042.HEIC", type: "", size: 12 * 1024 * 1024 }), { kind: "image" }); // shrunk before upload
+  assert.ok("error" in uploadKind({ name: "huge.jpg", type: "image/jpeg", size: 31 * 1024 * 1024 }));
+  assert.ok("error" in uploadKind({ name: "song.mp3", type: "audio/mpeg", size: 10 }));
 });
 
 test("bytes become base64, including large inputs", () => {
@@ -37,4 +40,10 @@ test("notes and summary explain what happened", () => {
   assert.equal(extractNotes(result).length, 3);
   assert.equal(saveSummary({ batch_id: "b", task_ids: ["1", "2"], planned: true, blocks: 3, unplaced: 0, conflicts: [] }), "Added 2 tasks, planned 3 focus blocks over the next two weeks.");
   assert.match(saveSummary({ batch_id: "b", task_ids: ["1"], planned: true, blocks: 0, unplaced: 1, conflicts: [{ deadline_at: "x", shortfall_min: 60 }] }), /1 deadline is tight/);
+});
+
+test("photo results explain undated items", () => {
+  const base: ExtractResult = { course: "", proposals: [{ ...proposal, deadline_at: null }], skipped_past: 0, skipped_invalid: 0, capped: false, truncated: false, fallback: false, source_chars: 0, timezone: "UTC", source: "photo" };
+  assert.deepEqual(extractNotes(base), ["Items without a date will be added without a deadline. Add one if you need it."]);
+  assert.deepEqual(extractNotes({ ...base, source: "text" }), []);
 });

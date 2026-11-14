@@ -38,6 +38,11 @@ class Settings(BaseSettings):
     anthropic_model: str = "claude-sonnet-5-5"
     anthropic_insight_model: str = "claude-haiku-5-5"
     llm_timeout_seconds: float = Field(default=8.0, gt=0, le=60)
+    # Imports (syllabus text, photos) are larger model calls than chat, so they get more time.
+    import_timeout_seconds: float = Field(default=45.0, gt=0, le=120)
+    # Photo import needs a model that reads images; see configured_vision_llm.
+    vision_provider: str = ""
+    vision_model: str = ""
     chat_rate_limit: int = Field(default=30, gt=0)
     api_rate_limit: int = Field(default=300, gt=0)
     vapid_public_key: str = ""

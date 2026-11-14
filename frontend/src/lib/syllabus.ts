@@ -2,7 +2,7 @@ import type { Category, TaskInput } from "./types.ts";
 
 export type ProposalKind = "exam" | "project" | "assignment" | "quiz" | "lab" | "reading" | "presentation" | "other";
 export type SyllabusProposal = { title: string; kind: ProposalKind; deadline_at: string | null; effort_est_min: number; importance: number; category: Category; notes: string | null };
-export type ExtractResult = { course: string; proposals: SyllabusProposal[]; skipped_past: number; skipped_invalid: number; capped: boolean; truncated: boolean; fallback: boolean; source_chars: number; timezone: string };
+export type ExtractResult = { course: string; proposals: SyllabusProposal[]; skipped_past: number; skipped_invalid: number; capped: boolean; truncated: boolean; fallback: boolean; source_chars: number; timezone: string; source?: "text" | "photo" };
 export type SaveResult = { batch_id: string; task_ids: string[]; planned: boolean; blocks: number; unplaced: number; conflicts: { deadline_at: string; shortfall_min: number }[] };
 export type ReviewRow = SyllabusProposal & { id: string; selected: boolean };
 
@@ -10,13 +10,19 @@ export const MAX_UPLOAD_BYTES = 8 * 1024 * 1024;
 export const MAX_TEXT_CHARS = 200_000;
 export const UNDO_SECONDS = 10;
 
-/** PDFs go to the server as base64; plain-text files are read in the browser. */
-export function uploadKind(file: { name: string; type: string; size: number }): { kind: "pdf" | "text" } | { error: string } {
-  if (file.size > MAX_UPLOAD_BYTES) return { error: "That file is larger than 8 MB. Upload a smaller file or paste the text." };
+const PHOTO_INPUT_LIMIT = 30 * 1024 * 1024; // photos are shrunk in the browser before upload
+
+/** PDFs go to the server as base64; photos are shrunk first; plain-text files are read in the browser. */
+export function uploadKind(file: { name: string; type: string; size: number }): { kind: "pdf" | "text" | "image" } | { error: string } {
   const name = file.name.toLowerCase();
+  if (file.type.startsWith("image/") || /\.(jpe?g|png|webp|heic|heif)$/.test(name)) {
+    if (file.size > PHOTO_INPUT_LIMIT) return { error: "That photo is larger than 30 MB. Use a smaller photo." };
+    return { kind: "image" };
+  }
+  if (file.size > MAX_UPLOAD_BYTES) return { error: "That file is larger than 8 MB. Upload a smaller file or paste the text." };
   if (file.type === "application/pdf" || name.endsWith(".pdf")) return { kind: "pdf" };
   if (file.type.startsWith("text/") || /\.(txt|md|csv)$/.test(name)) return { kind: "text" };
-  return { error: "Upload a PDF or a text file, or paste the syllabus." };
+  return { error: "Upload a photo, a PDF or a text file, or paste the text." };
 }
 
 export function bytesToBase64(bytes: Uint8Array): string {
@@ -46,6 +52,7 @@ export function selectedTasks(rows: ReviewRow[]): { tasks: TaskInput[] } | { err
 
 export function extractNotes(result: ExtractResult): string[] {
   const notes: string[] = [];
+  if (result.source === "photo" && result.proposals.some(p => !p.deadline_at)) notes.push("Items without a date will be added without a deadline. Add one if you need it.");
   if (result.fallback) notes.push("The AI model was unavailable, so LifeOS used a simpler date finder. Check each item carefully.");
   if (result.skipped_past) notes.push(`${result.skipped_past} item${result.skipped_past === 1 ? " is" : "s are"} already past and left out.`);
   if (result.truncated) notes.push("The syllabus was long, so only the first part was read.");
