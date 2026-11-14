@@ -168,23 +168,40 @@ class AnthropicLLMClient:
         return '\n'.join(item['text'] for item in data['content'] if item['type'] == 'text').strip()
 
 
-class GroqLLMClient(AnthropicLLMClient):
-    """Groq Cloud chat completions using the same validated local tools."""
+class OpenAICompatibleLLMClient(AnthropicLLMClient):
+    """Chat-completions client for any OpenAI-compatible provider, using the same validated local tools."""
+    provider = 'OpenAI-compatible'
+    url = ''
+
+    def __init__(self, api_key: str, model: str, *, url: str | None = None, provider: str | None = None,
+                 insight_model: str | None = None, timeout_seconds: float = 8.0):
+        super().__init__(api_key, model, insight_model=insight_model, timeout_seconds=timeout_seconds)
+        if url:
+            self.url = url
+        if provider:
+            self.provider = provider
 
     async def _post(self, body: dict) -> dict:
-        return await _post_json('https://api.groq.com/openai/v1/chat/completions',
-            {'Authorization': 'Bearer ' + self.api_key}, body,
+        return await _post_json(self.url, {'Authorization': 'Bearer ' + self.api_key}, body,
             timeout_seconds=self.timeout_seconds, retry_statuses={429, 500, 502, 503, 504})
 
-    @staticmethod
-    def _message(data: dict) -> dict:
+    def _message(self, data: dict) -> dict:
         try:
             message = data['choices'][0]['message']
         except (KeyError, IndexError, TypeError) as exc:
-            raise ValueError('Malformed Groq response') from exc
+            raise ValueError(f'Malformed {self.provider} response') from exc
         if not isinstance(message, dict):
-            raise ValueError('Malformed Groq response')
+            raise ValueError(f'Malformed {self.provider} response')
         return message
+
+    def _arguments(self, raw) -> dict:
+        # Providers return arguments as a JSON string; some return an object or an empty string.
+        if isinstance(raw, dict):
+            return raw
+        value = json.loads(raw) if isinstance(raw, str) and raw.strip() else {}
+        if not isinstance(value, dict):
+            raise ValueError(f'Malformed {self.provider} tool arguments')
+        return value
 
     async def parse(self, *, text: str, context: dict, history: list[dict] | None = None) -> LLMResponse:
         started = time.monotonic()
@@ -200,8 +217,8 @@ class GroqLLMClient(AnthropicLLMClient):
         data = await self._post({'model': self.model, 'messages': messages, 'tools': tools,
             'tool_choice': 'auto', 'temperature': 0, 'max_tokens': 1024})
         message = self._message(data)
-        calls = [ToolCall(name=item['function']['name'],
-            arguments=json.loads(item['function']['arguments'])) for item in message.get('tool_calls') or []]
+        calls = [ToolCall(name=item['function']['name'], arguments=self._arguments(item['function'].get('arguments')))
+                 for item in message.get('tool_calls') or []]
         usage = data.get('usage') or {}
         return LLMResponse(message.get('content') or '', calls,
             int(usage.get('prompt_tokens', 0)), int(usage.get('completion_tokens', 0)),
@@ -214,14 +231,72 @@ class GroqLLMClient(AnthropicLLMClient):
         return self._message(data).get('content') or ''
 
 
+class GroqLLMClient(OpenAICompatibleLLMClient):
+    """Groq Cloud chat completions."""
+    provider = 'Groq'
+    url = 'https://api.groq.com/openai/v1/chat/completions'
+
+
+# name -> (chat completions URL, default model). Keys/models come from settings: <NAME>_API_KEY, <NAME>_MODEL.
+OPENAI_COMPATIBLE_PROVIDERS = {
+    'groq': ('https://api.groq.com/openai/v1/chat/completions', 'openai/gpt-oss-20b'),
+    'xai': ('https://api.x.ai/v1/chat/completions', 'grok-4'),
+    'openai': ('https://api.openai.com/v1/chat/completions', 'gpt-4o-mini'),
+    'gemini': ('https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', 'gemini-2.5-flash'),
+    'openrouter': ('https://openrouter.ai/api/v1/chat/completions', 'openai/gpt-4o-mini'),
+}
+PROVIDER_ALIASES = {'grok': 'xai', 'google': 'gemini', 'claude': 'anthropic'}
+AUTO_ORDER = ('custom', 'groq', 'xai', 'openai', 'gemini', 'openrouter', 'anthropic')
+
+
+def _setting(settings, name: str, default: str = '') -> str:
+    value = getattr(settings, name, default)
+    return value.strip() if isinstance(value, str) else default
+
+
+def _provider_key(settings, provider: str) -> str:
+    return _setting(settings, 'llm_api_key') if provider == 'custom' else _setting(settings, f'{provider}_api_key')
+
+
+def _build_provider(settings, provider: str):
+    key = _provider_key(settings, provider)
+    if not key:
+        return None
+    timeout = getattr(settings, 'llm_timeout_seconds', 8.0)
+    if provider == 'anthropic':
+        return AnthropicLLMClient(key, _setting(settings, 'anthropic_model', 'claude-sonnet-5-5'),
+                                  insight_model=getattr(settings, 'anthropic_insight_model', None),
+                                  timeout_seconds=timeout)
+    if provider == 'custom':
+        url, model = _setting(settings, 'llm_base_url'), _setting(settings, 'llm_model')
+        if not url or not model:
+            return None  # LLM_API_KEY alone is not enough; the endpoint and model must be named.
+        if not url.endswith('/chat/completions'):
+            url = url.rstrip('/') + '/chat/completions'
+        return OpenAICompatibleLLMClient(key, model, url=url, provider='Custom', timeout_seconds=timeout)
+    url, default_model = OPENAI_COMPATIBLE_PROVIDERS[provider]
+    model = _setting(settings, f'{provider}_model') or _setting(settings, 'llm_model') or default_model
+    client_type = GroqLLMClient if provider == 'groq' else OpenAICompatibleLLMClient
+    return client_type(key, model, url=url, provider=provider.upper() if provider == 'xai' else provider.title(),
+                       timeout_seconds=timeout)
+
+
 def configured_llm():
+    """Pick the chat model from whichever API key is set.
+
+    LLM_PROVIDER (groq, xai/grok, openai, gemini, openrouter, anthropic, custom) forces a choice;
+    otherwise the first provider with a key wins, in AUTO_ORDER.
+    """
     from ..config import get_settings
     settings = get_settings()
-    if getattr(settings, 'groq_api_key', ''):
-        return GroqLLMClient(settings.groq_api_key, settings.groq_model,
-                             timeout_seconds=settings.llm_timeout_seconds)
-    if not getattr(settings, 'anthropic_api_key', ''):
-        return FallbackLLMClient()
-    return AnthropicLLMClient(settings.anthropic_api_key, settings.anthropic_model,
-                              insight_model=getattr(settings, 'anthropic_insight_model', None),
-                              timeout_seconds=getattr(settings, 'llm_timeout_seconds', 8.0))
+    forced = _setting(settings, 'llm_provider').lower()
+    forced = PROVIDER_ALIASES.get(forced, forced)
+    if forced:
+        if forced not in AUTO_ORDER:
+            raise ValueError(f'Unknown LLM_PROVIDER {forced!r}; use one of: {", ".join(AUTO_ORDER)}')
+        return _build_provider(settings, forced) or FallbackLLMClient()
+    for provider in AUTO_ORDER:
+        client = _build_provider(settings, provider)
+        if client is not None:
+            return client
+    return FallbackLLMClient()
