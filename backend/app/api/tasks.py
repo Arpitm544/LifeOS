@@ -12,11 +12,11 @@ from ..auth import current_user_id
 from ..db import get_session
 from ..models import ActionLog, Task, TaskDependency
 from ..schemas import TaskCreate, TaskRead, TaskPatch
-from ..services.task_service import create_task, get_task
+from ..services.task_service import complete_task_row, create_task, drop_task, get_task
 from ..services.domain_service import audit, snapshot, refresh_blocked, lock_tasks, replace_dependencies
 from pydantic import BaseModel, Field
 
-from ..services.planning_service import recalculate_priorities
+from ..services.planning_service import detect_conflicts, recalculate_priorities
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 
@@ -58,9 +58,11 @@ async def edit_task(task_id: UUID, payload: TaskPatch, session: AsyncSession = D
     before = snapshot(task)
     for key in changes:
         setattr(task, key, getattr(payload, key))
-    if changes.keys() & {'deadline_at', 'effort_est_min', 'importance'}:
+    if changes.keys() & {'deadline_at', 'effort_est_min', 'importance', 'pinned', 'category'}:
         await recalculate_priorities(session, user_id)
     await audit(session, user_id, task, before, 'update')
+    if changes.keys() & {'deadline_at', 'effort_est_min', 'pinned', 'category'}:
+        await detect_conflicts(session, user_id)
     await session.commit()
     await session.refresh(task)
     return task
@@ -89,6 +91,7 @@ async def list_tasks(
 @router.post("", response_model=TaskRead, status_code=status.HTTP_201_CREATED)
 async def add_task(payload: TaskCreate, session: AsyncSession = Depends(get_session), user_id: UUID = Depends(current_user_id)) -> Task:
     task = await create_task(session, user_id, payload)
+    await detect_conflicts(session, user_id)
     await session.commit()
     await session.refresh(task)
     return task
@@ -101,12 +104,10 @@ async def complete_task(task_id: UUID, actual_effort_min: Optional[int] = Query(
     task = await get_task(session, user_id, task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
-    before = snapshot(task)
-    task.status = "done"
-    task.completed_at = datetime.now(timezone.utc)
-    task.effort_actual_min = actual_effort_min
-    await audit(session, user_id, task, before, 'complete')
-    await refresh_blocked(session, user_id)
+    if task.status in {'done', 'dropped'}:
+        raise HTTPException(status_code=409, detail=f'Task is already {task.status}')
+    await complete_task_row(session, user_id, task, actual_effort_min)
+    await detect_conflicts(session, user_id)
     await session.commit()
     await session.refresh(task)
     return task
@@ -120,20 +121,35 @@ async def delete_task(task_id: UUID, confirmed: bool = False, session: AsyncSess
     task = await get_task(session, user_id, task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
-    before = snapshot(task)
-    task.status = 'dropped'
-    from ..models import PlanBlock
-    from uuid import uuid4
-    batch_id = uuid4()
-    blocks = (await session.execute(select(PlanBlock).where(PlanBlock.user_id == user_id,
-        PlanBlock.task_id == task.id, PlanBlock.status == 'planned',
-        PlanBlock.end_at > datetime.now(timezone.utc)).order_by(PlanBlock.id).with_for_update())).scalars().all()
-    for block in blocks:
-        block_before = snapshot(block)
-        log = await audit(session, user_id, block, block_before, 'delete')
-        log.batch_id, log.after = batch_id, None
-        await session.delete(block)
-    (await audit(session, user_id, task, before, 'delete')).batch_id = batch_id
-    await refresh_blocked(session, user_id)
+    await drop_task(session, user_id, task)
+    await detect_conflicts(session, user_id)
     await session.commit()
 
+
+
+class ActualEffort(BaseModel):
+    """One-tap answer to "How long did it take?" (PRD 5.5 step 4)."""
+    answer: str = Field(pattern='^(less|about_right|more|custom)$')
+    minutes: Optional[int] = Field(default=None, ge=1, le=1440)
+
+
+@router.post('/{task_id}/actual-effort', response_model=TaskRead)
+async def record_actual_effort(task_id: UUID, payload: ActualEffort, session: AsyncSession = Depends(get_session),
+                               user_id: UUID = Depends(current_user_id)) -> Task:
+    await lock_tasks(session, user_id)
+    task = await get_task(session, user_id, task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail='Task not found')
+    if task.status != 'done':
+        raise HTTPException(status_code=409, detail='Record effort after completing the task')
+    if payload.answer == 'custom' and payload.minutes is None:
+        raise HTTPException(status_code=422, detail='minutes is required for a custom answer')
+    factor = {'less': 0.75, 'about_right': 1.0, 'more': 1.5}.get(payload.answer)
+    before = snapshot(task)
+    task.effort_actual_min = payload.minutes if factor is None else round(task.effort_est_min * factor)
+    await audit(session, user_id, task, before, 'effort')
+    await recalculate_priorities(session, user_id)
+    await detect_conflicts(session, user_id)
+    await session.commit()
+    await session.refresh(task)
+    return task

@@ -2,14 +2,18 @@
 
 This service follows the PRD boundary: the LLM may interpret language and write replies, while backend code owns dates, validation, priorities, schedules, capacity checks, reminders, and state changes.
 
-## Current foundation
+## What the API does
 
-- FastAPI service with `/health` and `/api/chat`.
-- Pydantic request contracts for chat and task creation.
-- Provider-neutral settings for Supabase/Postgres and Anthropic.
-- Deterministic priority formula with P1/P2/P3 bands and explainable `why` text.
-- Date-aware regex quick-add fallback for LLM outages/timeouts.
-- Pytest contract for the priority formula.
+- **Chat** (`POST /api/chat`): one LLM tool-use call per message for all nine PRD tools (create/update/complete/delete task, create event, query schedule, plan day, check capacity, set preference). Every call is validated (Pydantic, dual date parse, ownership, duplicate guard), references such as "the report" or "it" are resolved with trigram matching plus the last touched item, at most one clarification is asked, and deletes or changes to more than 3 items wait for a "yes". The last 6 messages are sent as working memory and every message is stored. LLM outage (8 s budget, one retry) falls back to regex quick-add.
+- **Planning**: priority formula with a stored `why` line and score breakdown, calibrated effort (estimate x measured factor per category), time-blocking scheduler, Today view, Capacity Guard after every change.
+- **Capacity Guard**: `GET /api/conflicts/{id}/options` simulates extend hours / move a flexible item / renegotiate (with a draft message) and previews each plan; `POST /api/conflicts/{id}/resolve` applies one as a single undoable batch. `POST /api/capacity/check` with `hypothetical` answers "can I take this on?" without saving.
+- **Reminders**: rule-based times with templates, custom "remind me at" overrides, plan-block reminders, Done / Snooze / Reschedule (next 3 free slots, then `POST /api/reminders/{id}/reschedule`), notification centre (`GET /api/reminders`).
+- **Worker** (`python -m app.worker`): every 30 s delivers due reminders with Web Push (`FOR UPDATE SKIP LOCKED`, max 1 push per user per 10 min, extras merged), marks reminders older than 2 h as missed, re-scores priorities hourly, queues the daily plan push, applies retention nightly and writes a heartbeat (`GET /health/worker`).
+- **Insights** (`GET /api/insights`): calibration factors, focus windows, plan adherence, overdue/snooze rates and a 14-day chart from the database; up to 3 suggestions whose numbers must come from the stats (template fallback), with Apply / Dismiss.
+- **Privacy**: `GET /api/export` (JSON of every row) and `DELETE /api/account?confirmed=true`.
+- **Browser access**: CORS for the Next.js origins in `CORS_ORIGINS`.
+
+Voice input and spoken replies are not part of the product any more: there is no `spoken_reply`, `source` or transcription endpoint.
 
 ## Installation
 
@@ -23,7 +27,6 @@ make run
 
 Copy `.env.example` to `.env` before connecting PostgreSQL/Supabase. The install command uses the local virtual environment and installs the package in editable mode with its test extra.
 
-## Planned implementation order
 ### Demo fixtures
 
 Use a dedicated existing Clerk demo account. The seed script does not create an Auth account or apply migrations. Configure `DATABASE_URL` in `.env` and apply migrations first.
@@ -40,19 +43,24 @@ Load using the actual demo Clerk subject:
 .venv/bin/python seed_demo.py --user-id YOUR_DEMO_CLERK_SUBJECT
 ```
 
-Fixtures include 14 days of labelled synthetic completions, a study effort factor of 1.6, classes, café shifts, gym, preferences, upcoming tasks, and a reminder. Same account/date reruns skip existing fixtures; existing preferences are preserved. Changing the reference date creates another fixture set. All rows are inserted in one transaction. This seeds data only; it does not establish that the full demo flow or push delivery works.
+Fixtures include 14 days of labelled synthetic completions, a study effort factor of 1.6 (tasks store raw estimates; the planner applies the factor, so the 3 h report plans as 4.8 h), classes, café shifts, gym, preferences, upcoming tasks, and a reminder. Same account/date reruns skip existing fixtures; existing preferences are preserved. Changing the reference date creates another fixture set. All rows are inserted in one transaction. This seeds data only; it does not establish that the full demo flow or push delivery works.
 
-
-1. SQLAlchemy models and migrations for tasks, events, plan blocks, conflicts, reminders, preferences, messages, activity events, and action logs.
-2. JWT authentication and user-scoped repository methods/RLS policies.
-3. NLU tool contracts, date dual-parse validation, ownership checks, idempotent chat orchestration, and 10-second undo.
-4. Scheduler, capacity guard, reminders/worker, insights, and remaining API routes.
 
 The API contract keeps timestamps in UTC and accepts the client timezone for local-date parsing, as required by the PRD.
 
 
 Local PostgreSQL without TLS: set `DATABASE_SSL=false`. Hosted databases keep the default `true`; the wheel includes the Supabase CA and fails if that packaged asset is missing.
 
-Chat uses `ANTHROPIC_API_KEY` and `ANTHROPIC_MODEL` (default `claude-sonnet-4-5`). No-action provider replies do not create tasks. Missing credentials, transport failures and malformed provider responses use quick-add; past deadlines ask for clarification.
+Chat uses `ANTHROPIC_API_KEY` and `ANTHROPIC_MODEL` (default `claude-sonnet-5-5`); insight wording uses `ANTHROPIC_INSIGHT_MODEL` (default `claude-haiku-5-5`). No-action provider replies do not create tasks. Missing credentials, transport failures and malformed provider responses use quick-add; past deadlines ask for clarification.
 
-Apply migration 006 before starting this version. Runtime rate limits use PostgreSQL transactions and a per-user/bucket advisory lock across all workers. Expired rows for inactive users are removed on subsequent API traffic by the bounded-permission cleanup function. Development tests may inject the in-memory limiter.
+Apply migrations in numeric order: `006` must already be applied before `007` (see `migrations/README.md`). Run the worker as a second process:
+
+```bash
+.venv/bin/python -m app.worker
+```
+
+The worker reads due reminders for every user, so it needs an administrative database connection: set `WORKER_DATABASE_URL` (it falls back to `DATABASE_URL` for local development). Never run it on the tenant-scoped API login (`lifeos_api`); RLS would hide other users' reminders.
+
+Web Push needs `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY`; without them reminders still appear in the notification centre and on Today. Subscriptions are accepted only for the browser push services in `PUSH_ALLOWED_HOSTS`.
+
+Runtime rate limits use PostgreSQL transactions and a per-user/bucket advisory lock across all workers. Expired rows for inactive users are removed on subsequent API traffic by the bounded-permission cleanup function. Development tests may inject the in-memory limiter.

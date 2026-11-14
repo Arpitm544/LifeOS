@@ -110,24 +110,56 @@ def test_clerk_seed_ids_are_deterministic_and_scoped():
     assert all(row['user_id'] == 'user_alpha' for rows in first.values() for row in rows)
 
 
-@pytest.mark.parametrize('reply', [LLMResponse('Hello', 'Hello', []),
-    LLMResponse('Clarify', 'Clarify', [ToolCall(name='create_task', arguments={'title': 'Task', 'category': 'invalid'})])])
+async def _sqlite_session():
+    from sqlalchemy.dialects.postgresql import JSONB
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from sqlalchemy.ext.compiler import compiles
+    from app.models import Base
+
+    @compiles(JSONB, 'sqlite')
+    def sqlite_json(element, compiler, **kwargs):
+        return 'JSON'
+    engine = create_async_engine('sqlite+aiosqlite:///:memory:')
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    return engine, async_sessionmaker(engine, expire_on_commit=False)
+
+
+async def _row_counts(session):
+    from sqlalchemy import func, select
+    from app.models import ActionLog, Conflict, Event, PlanBlock, Preference, Reminder, Task
+    return [(await session.execute(select(func.count()).select_from(model))).scalar_one()
+            for model in (Task, Event, Preference, ActionLog, PlanBlock, Reminder, Conflict)]
+
+
+@pytest.mark.parametrize('reply', [LLMResponse('Hello', []),
+    LLMResponse('Clarify', [ToolCall(name='create_task', arguments={'title': 'Task', 'category': 'invalid'})])])
 def test_chat_no_action_or_invalid_tool_never_writes(reply):
-    session, llm = AsyncMock(), AsyncMock()
-    llm.parse.return_value = reply
-    result = asyncio.run(handle_chat(session, user_id='user_a', text='Hello', client_tz='UTC', llm=llm))
-    assert not result['fallback'] and result['actions'] == []
-    session.flush.assert_not_awaited()
-    if reply.tool_calls:
-        assert result['clarification']
+    async def run():
+        engine, factory = await _sqlite_session()
+        llm = AsyncMock()
+        llm.parse.return_value = reply
+        async with factory() as session:
+            result = await handle_chat(session, user_id='user_a', text='Hello', client_tz='UTC', llm=llm)
+            assert not result['fallback'] and result['actions'] == []
+            assert await _row_counts(session) == [0] * 7
+            if reply.tool_calls:
+                assert result['clarification']
+        await engine.dispose()
+    asyncio.run(run())
 
 
 def test_provider_outage_uses_fallback_and_past_date_clarifies(monkeypatch):
-    llm, session = AsyncMock(), AsyncMock()
-    llm.parse.side_effect = httpx.ReadTimeout('offline')
-    result = asyncio.run(handle_chat(session, user_id='user_a', text='Report by yesterday', client_tz='UTC', llm=llm))
-    assert result['fallback'] and result['clarification'] and not result['actions']
-    session.flush.assert_not_awaited()
+    async def run():
+        engine, factory = await _sqlite_session()
+        llm = AsyncMock()
+        llm.parse.side_effect = httpx.ReadTimeout('offline')
+        async with factory() as session:
+            result = await handle_chat(session, user_id='user_a', text='Report by yesterday', client_tz='UTC', llm=llm)
+            assert result['fallback'] and result['clarification'] and not result['actions']
+            assert await _row_counts(session) == [0] * 7
+        await engine.dispose()
+    asyncio.run(run())
 
 
 def test_configured_anthropic_adapter_sends_tools_and_reads_response(monkeypatch):

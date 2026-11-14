@@ -29,8 +29,8 @@ async def apply_reminder_action(session: AsyncSession, *, user_id: UUID, reminde
     if reminder is None:
         return None
     if action == 'reschedule':
-        from fastapi import HTTPException
-        raise HTTPException(status_code=501, detail='Free-slot reschedule suggestions are not implemented')
+        # Slots are offered by the API layer (next_free_slots); nothing changes here.
+        return reminder
     if reminder.status in {'acted', 'cancelled'}:
         return reminder
     if action == 'done':
@@ -49,6 +49,13 @@ async def apply_reminder_action(session: AsyncSession, *, user_id: UUID, reminde
             .values(status='cancelled'))
     reminder.action_taken = action
     reminder.status = "acted"
+    from ..models import ActivityEvent
+    category = None
+    if reminder.item_type == 'task':
+        category = (await session.execute(select(Task.category).where(Task.id == reminder.item_id,
+            Task.user_id == user_id))).scalar_one_or_none()
+    session.add(ActivityEvent(user_id=user_id, type='reminder_snoozed' if action.startswith('snooze') else 'reminder_' + action,
+        entity_id=reminder.id, payload={'kind': reminder.kind, 'category': category or 'other', 'action': action}))
     if action == "snooze_15":
         reminder.fire_at = datetime.now(timezone.utc) + timedelta(minutes=15)
         reminder.status = "pending"

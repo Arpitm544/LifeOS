@@ -1,4 +1,5 @@
 from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from .config import get_settings
 from .database_tls import database_ssl_context
@@ -25,7 +26,9 @@ engine = create_async_engine(get_settings().database_url, pool_pre_ping=True,
                              connect_args={"ssl": database_ssl_context()} if get_settings().database_ssl else {"ssl": False})
 SessionFactory = async_sessionmaker(engine, expire_on_commit=False)
 
-async def get_session(user_id=Depends(current_user_id)) -> AsyncGenerator[AsyncSession, None]:
+@asynccontextmanager
+async def user_session(user_id) -> AsyncGenerator[AsyncSession, None]:
+    """Tenant-scoped session; also usable inside a route that opens it only when needed."""
     async with SessionFactory() as session:
         # after_begin reapplies SET LOCAL after endpoint commits and refreshes.
         session.info['user_id'] = user_id
@@ -33,5 +36,10 @@ async def get_session(user_id=Depends(current_user_id)) -> AsyncGenerator[AsyncS
         # profile synchronization can enrich it later without trusting client data.
         from sqlalchemy.dialects.postgresql import insert
         await session.execute(insert(User).values(id=user_id).on_conflict_do_nothing(index_elements=['id']))
+        yield session
+
+
+async def get_session(user_id=Depends(current_user_id)) -> AsyncGenerator[AsyncSession, None]:
+    async with user_session(user_id) as session:
         yield session
 

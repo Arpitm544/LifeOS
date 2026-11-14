@@ -2,7 +2,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 from typing import Optional
-from sqlalchemy import Boolean, DateTime, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Integer, String, Text, UniqueConstraint
 from sqlalchemy.types import TypeDecorator
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -33,6 +33,8 @@ class Task(Base):
     status: Mapped[str] = mapped_column(String(16), default="open", index=True)
     priority_score: Mapped[float] = mapped_column(default=0)
     priority_band: Mapped[str] = mapped_column(String(2), default="P3")
+    priority_why: Mapped[Optional[str]] = mapped_column(Text)
+    priority_breakdown: Mapped[Optional[dict]] = mapped_column(JSONB)
     pinned: Mapped[bool] = mapped_column(Boolean, default=False)
     recurrence_rrule: Mapped[Optional[str]] = mapped_column(String(512))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
@@ -169,6 +171,7 @@ class Message(Base):
 
 class PushSubscription(Base):
     __tablename__ = 'push_subscriptions'
+    __table_args__ = (UniqueConstraint('user_id', 'endpoint'),)
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id: Mapped[str] = mapped_column(ClerkUserId(), index=True)
     endpoint: Mapped[str] = mapped_column(Text)
@@ -184,3 +187,23 @@ class WorkerHeartbeat(Base):
     worker_name: Mapped[str] = mapped_column(Text)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
 
+
+
+class Suggestion(Base):
+    """Insight suggestions shown on the Insights screen (Apply / Dismiss)."""
+    __tablename__ = 'suggestions'
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[str] = mapped_column(ClerkUserId(), index=True)
+    type: Mapped[str] = mapped_column(String(32))
+    text: Mapped[str] = mapped_column(Text)
+    payload: Mapped[dict] = mapped_column(JSONB, default=dict)
+    status: Mapped[str] = mapped_column(String(16), default='active')
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+
+class WorkerStatus(Base):
+    """Worker liveness, not tenant data: written only by the administrative worker."""
+    __tablename__ = 'worker_status'
+    worker_name: Mapped[str] = mapped_column(Text, primary_key=True)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    last_jobs: Mapped[dict] = mapped_column(JSONB, default=dict)

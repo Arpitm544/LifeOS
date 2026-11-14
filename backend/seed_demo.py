@@ -61,12 +61,14 @@ def build_demo(user_id: str, anchor: date, tz_name: str = "Asia/Kolkata") -> dic
             add("activity_events", f"activity:{label}", type="task_completed", entity_id=task_id,
                 occurred_at=finish, payload={"demo": True, "category": category, "estimated_min": estimate, "actual_min": actual})
 
+    # Raw estimates: the planner multiplies them by the measured 1.6 study factor
+    # (3 h report -> 4.8 h planned), matching the demo script.
     # Upcoming Thursday stays in the future even when seeded late in the week.
     thursday = anchor + timedelta(days=(3 - anchor.weekday()) % 7 or 7)
     report = add("tasks", "report", title="[Demo] Finish DBMS report", notes=MARKER, category="study",
-                 deadline_at=at(thursday, 9), effort_est_min=288, importance=4, status="open", created_at=at(anchor, 0))
+                 deadline_at=at(thursday, 9), effort_est_min=180, importance=4, status="open", created_at=at(anchor, 0))
     add("tasks", "quiz", title="[Demo] Study for ML quiz", notes=MARKER, category="study",
-        deadline_at=at(thursday, 9), effort_est_min=192, importance=4, status="open", created_at=at(anchor, 0))
+        deadline_at=at(thursday, 9), effort_est_min=120, importance=4, status="open", created_at=at(anchor, 0))
     add("tasks", "mom", title="[Demo] Call mom", notes=MARKER, category="social",
         deadline_at=at(anchor + timedelta(days=6), 18), effort_est_min=15, importance=3, status="open", created_at=at(anchor, 0))
     # No immediately due pushes: sample reminders are in-app only until a worker is configured.

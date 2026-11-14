@@ -78,8 +78,6 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         limits = [('api', settings.api_rate_limit)]
         if request.url.path == "/api/chat":
             limits.append(('chat', settings.chat_rate_limit))
-        elif request.url.path == "/api/voice/transcribe":
-            limits.append(('transcription', settings.transcription_rate_limit))
         for bucket, limit in limits:
             result = self.limiter.allow(identity=identity, bucket=bucket, limit=limit)
             import inspect

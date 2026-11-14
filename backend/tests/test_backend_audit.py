@@ -28,7 +28,7 @@ def settings(monkeypatch):
                             clerk_issuer='https://audit.clerk.accounts.dev',
                             clerk_jwks_url='https://audit.clerk.accounts.dev/.well-known/jwks.json',
                             clerk_audience='lifeos-api', clerk_authorized_parties='http://localhost:3000',
-                            api_rate_limit=300, chat_rate_limit=30, transcription_rate_limit=5)
+                            api_rate_limit=300, chat_rate_limit=30)
     monkeypatch.setattr(auth, 'get_settings', lambda: value)
     monkeypatch.setattr(config, 'get_settings', lambda: value)
     return value
