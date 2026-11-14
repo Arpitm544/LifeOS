@@ -9,7 +9,7 @@ import { ThemeToggle } from "@/components/ui/theme-toggle";
 import { useDisplayName } from "@/hooks/use-display-name";
 import { UserButton } from "@clerk/nextjs";
 
-const links = [["Today", "/today"], ["Chat", "/chat"], ["Tasks", "/tasks"], ["Import", "/import"], ["Calendar", "/import/calendar"], ["Insights", "/insights"], ["Profile", "/profile"]] as const;
+const links = [["Today", "/today"], ["Chat", "/chat"], ["Tasks", "/tasks"], ["Import", "/import"], ["Insights", "/insights"], ["Profile", "/profile"]] as const;
 
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
