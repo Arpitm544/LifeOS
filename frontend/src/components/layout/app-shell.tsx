@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useWorkspace } from "@/components/providers/workspace-provider";
 import { EffortPrompt } from "@/components/tasks/effort-prompt";
+import { ThemeToggle } from "@/components/ui/theme-toggle";
 import { useDisplayName } from "@/hooks/use-display-name";
 import { UserButton } from "@clerk/nextjs";
 
@@ -43,18 +44,17 @@ export function AppShell({ children }: { children: ReactNode }) {
   return <>
     <a className="skip-link" href="#main">Skip to content</a>
     <aside className="sidebar">
-      <Link href="/today" className="brand"><span className="brand-mark" aria-hidden="true">◉</span> LifeOS</Link>
+      <Link href="/today" className="brand"><span className="landing-logo" aria-hidden="true" /> LifeOS</Link>
       <p className="brand-caption">Your personal operating system</p>
       <nav aria-label="Main navigation">{links.map(([label, href]) => <Link href={href} key={href} className={`nav-link ${pathname === href ? "active" : ""}`} aria-current={pathname === href ? "page" : undefined}>{label}</Link>)}</nav>
-      <div className="account-card"><div className="account-identity"><UserButton /><Link href="/profile"><strong>{name.full}</strong></Link></div><small>Personal workspace</small><small className="sync-status"><i /> Synced to your account</small></div>
+      <div className="account-card"><div className="account-identity"><UserButton /><ThemeToggle /><Link href="/profile"><strong>{name.full}</strong></Link></div><small>Personal workspace</small><small className="sync-status"><i /> Synced to your account</small></div>
     </aside>
-    <header className="mobile-header"><Link href="/today" className="brand">◉ LifeOS</Link><UserButton /></header>
+    <header className="mobile-header"><div className="mobile-header-top"><Link href="/today" className="brand"><span className="landing-logo" aria-hidden="true" /> LifeOS</Link><div className="mobile-header-actions"><ThemeToggle /><UserButton /></div></div><nav className="mobile-nav" aria-label="Main navigation">{links.map(([label, href]) => <Link key={href} href={href} aria-current={pathname === href ? "page" : undefined} className={pathname === href ? "active" : ""}>{label}</Link>)}</nav></header>
     <div className="workspace">
       <header className="topbar"><span>Workspace <span className="slash">/</span> {current}</span><span>{date} <span className="slash">·</span> {preferences.timezone}</span><Link href="/tasks" className="search-link"><span aria-hidden="true">⌕</span> Search tasks</Link></header>
       <main id="main" tabIndex={-1}>{children}</main>
       <footer className="workspace-footer"><span>Life, with a little more space.</span></footer>
     </div>
-    <nav className="mobile-nav" aria-label="Mobile navigation">{links.map(([label, href]) => <Link key={href} href={href} aria-current={pathname === href ? "page" : undefined} className={pathname === href ? "active" : ""}>{label}</Link>)}</nav>
     {pendingEffort ? <aside ref={effortSheet} className="effort-sheet" role="dialog" aria-live="polite" aria-label={`How long did ${pendingEffort.title} take?`}><button className="dialog-close" onClick={() => dismissEffort()} aria-label="Skip this question">×</button><p className="eyebrow blue">Done: {pendingEffort.title}</p><EffortPrompt key={pendingEffort.id} taskId={pendingEffort.id} estimate={pendingEffort.effort_est_min} onDone={() => { const id = pendingEffort.id; window.setTimeout(() => dismissEffort(id), 1200); }} /></aside> : null}
     {notice ? <div className="toast" role="status"><span>{notice}</span><button aria-label="Dismiss notification" onClick={() => notify("")}>×</button></div> : null}
   </>;

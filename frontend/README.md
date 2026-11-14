@@ -10,7 +10,7 @@ npm ci
 npm run dev
 ```
 
-Open http://localhost:3000. Use this hostname consistently for Clerk development sessions. Node 22.6 or newer is required; tests use Node's TypeScript stripping support.
+Open http://localhost:3000. Use this hostname consistently for Clerk development sessions. Node 22.13 or newer is required; tests use Node's TypeScript stripping support.
 
 ```sh
 npm run typecheck
@@ -48,10 +48,11 @@ tests/                    # API client, validation, timezone filters and prefere
 - Tasks, preferences, routines, Today and Insights are loaded from and saved to the backend API. Chat requests go to the API, but the conversation on screen is kept only for the current visit.
 - Timezone, work/focus/quiet hours, reminder lead, estimate padding and a per-device reduced-motion setting.
 - Chat calls `POST /api/chat` and shows action cards with Undo, clarification and confirmation chips.
+- Chat supports microphone transcription and spoken replies through authenticated Deepgram routes when `DEEPGRAM_API_KEY` is configured. Each route reserves a backend quota before contacting Deepgram: five requests per user per minute for transcription and five for speech. The backend and migration 006 must be available; quota errors fail closed.
 
 ## Backend
 
-Set `NEXT_PUBLIC_API_URL` (default `http://127.0.0.1:8000`). Every request sends the Clerk session token as `Authorization: Bearer`. Tasks, preferences, routines, Today, Insights and chat all come from the API; nothing is stored in the browser except the reduced-motion setting.
+Set `NEXT_PUBLIC_API_URL` (default `http://127.0.0.1:8000`). Every request sends the Clerk session token as `Authorization: Bearer`. Tasks, preferences, routines, Today, Insights and chat all come from the API; only the per-device theme and reduced-motion settings are stored in the browser. Theme is available before sign-in and falls back to the system preference until a choice is saved.
 
 ## Integration boundaries
 

@@ -44,6 +44,6 @@ export function TaskForm({ task, onDone }: { task?: Task; onDone?: () => void })
     <label>Notes <span className="optional">(optional)</span><textarea name="notes" maxLength={2000} rows={2} defaultValue={task?.notes ?? ""} /></label>
     {error ? <p role="alert" className="error-message">{error}</p> : null}
     {saved && !task ? <p role="status" className="success-message">Added. A little less to keep in your head.</p> : null}
-    <button type="submit" className="button" disabled={busy}>{busy ? "Saving…" : task ? "Save changes" : "Create task"}<span aria-hidden="true">↗</span></button>
+    <button type="submit" className="button" disabled={busy}>{busy ? "Saving…" : task ? "Save changes" : "Create task"}<span aria-hidden="true">→</span></button>
   </form>;
 }

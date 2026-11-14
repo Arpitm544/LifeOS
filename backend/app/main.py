@@ -2,7 +2,7 @@ from __future__ import annotations
 from typing import Optional
 
 from datetime import datetime, timedelta, timezone
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
 from .schemas import ChatRequest
 from .auth import current_user_id
 from .db import get_session
@@ -82,6 +82,13 @@ async def worker_health() -> dict:
     last = last if last.tzinfo else last.replace(tzinfo=timezone.utc)
     stale = datetime.now(timezone.utc) - last > timedelta(minutes=2)
     return {"status": "stale" if stale else "ok", "last_seen_at": last}
+
+@app.post("/api/voice/transcribe/quota", status_code=204)
+@app.post("/api/voice/speak/quota", status_code=204)
+async def voice_quota(user_id=Depends(current_user_id)):
+    # RateLimitMiddleware atomically reserves this user's budget across API instances.
+    return Response(status_code=204, headers={"Cache-Control": "no-store"})
+
 
 @app.post("/api/chat")
 async def chat(request: ChatRequest, idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key", min_length=1, max_length=128),

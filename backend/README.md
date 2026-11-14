@@ -18,7 +18,7 @@ This service follows the PRD boundary: the LLM may interpret language and write 
 - **Privacy**: `GET /api/export` (JSON of every row) and `DELETE /api/account?confirmed=true`.
 - **Browser access**: CORS for the Next.js origins in `CORS_ORIGINS`.
 
-Voice input and spoken replies are not part of the product any more: there is no `spoken_reply`, `source` or transcription endpoint.
+Voice input and spoken replies are handled by authenticated Next.js routes in the frontend; the backend chat API remains text-only and does not expose `spoken_reply` or transcription endpoints.
 
 ## Installation
 

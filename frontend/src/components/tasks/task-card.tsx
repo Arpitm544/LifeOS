@@ -35,7 +35,7 @@ export function TaskCard({ task, onEdit }: { task: Task; onEdit?: (task: Task) =
   return <article className={`task-card ${done ? "completed" : ""}`}>
     <div className="task-title-row"><button className="task-check" aria-label={`Complete ${task.title}`} aria-pressed={done} disabled={done || busy} onClick={complete}>{done ? "✓" : ""}</button>
       <h3 className="task-title">{task.title}</h3>
-      {onEdit ? <button className="edit-task" onClick={() => onEdit(task)} aria-label={`Edit ${task.title}`}>↗</button> : null}
+      {onEdit ? <button className="edit-task" onClick={() => onEdit(task)} aria-label={`Edit ${task.title}`}>→</button> : null}
     </div>
     <p className="task-meta">{formatDeadline(task.deadline_at, preferences.timezone)}<span aria-hidden="true">·</span>{formatEffort(task.effort_est_min)}<span aria-hidden="true">·</span>{task.category}
       {task.status === "blocked" ? <span className="status-label">Blocked</span> : null}
