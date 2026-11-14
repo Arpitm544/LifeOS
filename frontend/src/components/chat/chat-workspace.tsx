@@ -2,66 +2,84 @@
 
 import Link from "next/link";
 import { useEffect, useRef, useState, type FormEvent } from "react";
+import { ActionCard } from "@/components/chat/action-card";
 import { useWorkspace } from "@/components/providers/workspace-provider";
-import { Orbit } from "@/components/ui/orbit";
-import { TaskCard } from "@/components/tasks/task-card";
-import { useVoiceInput } from "@/hooks/use-voice-input";
+import { useDisplayName } from "@/hooks/use-display-name";
+import { readableError } from "@/lib/api";
+import { formatDeadline, formatHours } from "@/lib/task-utils";
+import type { ChatResponse } from "@/lib/types";
 
-type Message = { id: string; text: string; taskId?: string; undone?: boolean };
-const prompts = ["What should I do next?", "Can I fit in a 2-hour project?", "Plan tomorrow around class."];
-const previewReply = "This is the frontend preview. AI understanding and scheduling aren’t connected yet. You can save this message as a simple task, or add its details in Tasks.";
+type Message = { id: string; key: string; text: string; status: "sending" | "done" | "error"; response?: ChatResponse; error?: string };
+const prompts = ["What should I do next?", "Can I fit in a 2-hour project by Friday?", "Plan my day.", "I never work after 9 pm."];
 
 export function ChatWorkspace() {
-  const { tasks, preferences, saveTask, deleteTask, notify } = useWorkspace();
+  const { api, preferences, reloadTasks, reloadPreferences, reducedMotion } = useWorkspace();
+  const name = useDisplayName();
   const [text, setText] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
-  const [speaking, setSpeaking] = useState(false);
   const input = useRef<HTMLTextAreaElement>(null);
   const end = useRef<HTMLDivElement>(null);
-  const voice = useVoiceInput(setText);
-  const sampleTask = tasks.find(task => task.id === "report");
-  const name = preferences.name.trim().split(/\s+/)[0];
+  const sending = messages.some(message => message.status === "sending");
 
   useEffect(() => {
     const prompt = new URLSearchParams(window.location.search).get("prompt");
     if (prompt) { setText(prompt.slice(0, 1000)); input.current?.focus(); }
-    return () => window.speechSynthesis?.cancel();
   }, []);
-  useEffect(() => { if (messages.length) end.current?.scrollIntoView({ behavior: preferences.reducedMotion ? "instant" : "smooth", block: "nearest" }); }, [messages.length, preferences.reducedMotion]);
+  useEffect(() => { if (messages.length) end.current?.scrollIntoView({ behavior: reducedMotion ? "instant" : "smooth", block: "nearest" }); }, [messages, reducedMotion]);
+
+  async function deliver(message: Message) {
+    setMessages(current => current.map(m => m.id === message.id ? { ...message, status: "sending", error: undefined } : m));
+    try {
+      // The same Idempotency-Key is reused on retry, so a request that reached the server is not applied twice.
+      const response = await api<ChatResponse>("/api/chat", { method: "POST", headers: { "Idempotency-Key": message.key }, body: { text: message.text, client_tz: preferences.timezone } });
+      setMessages(current => current.map(m => m.id === message.id ? { ...m, status: "done", response } : m));
+      if (response.actions.length) {
+        await Promise.all([reloadTasks(), response.actions.some(a => a.type === "preference_set") ? reloadPreferences() : Promise.resolve()]).catch(() => undefined);
+      }
+    } catch (e) {
+      setMessages(current => current.map(m => m.id === message.id ? { ...m, status: "error", error: readableError(e, "LifeOS could not answer.") } : m));
+    }
+  }
+
+  function send(value: string) {
+    const clean = value.trim().slice(0, 1000);
+    if (!clean || sending) return;
+    const message: Message = { id: crypto.randomUUID(), key: crypto.randomUUID(), text: clean, status: "sending" };
+    setMessages(current => [...current, message]);
+    deliver(message);
+  }
 
   function submit(event: FormEvent) {
     event.preventDefault();
-    if (!text.trim() || voice.listening) return;
-    setMessages(current => [...current, { id: crypto.randomUUID(), text: text.trim() }]);
-    setText(""); input.current?.focus();
+    if (!text.trim() || sending) return;
+    send(text); setText(""); input.current?.focus();
   }
 
-  function saveMessage(message: Message) {
-    try {
-      const task = saveTask({ title: message.text, deadline: null, effort: 30, importance: 3, category: "other" });
-      setMessages(current => current.map(m => m.id === message.id ? { ...m, taskId: task.id, undone: false } : m));
-    } catch (e) { notify(e instanceof Error ? e.message : "Could not create task."); }
-  }
-
-  function readReply() {
-    if (!("speechSynthesis" in window)) { notify("Spoken replies are unavailable in this browser."); return; }
-    if (speaking) { window.speechSynthesis.cancel(); setSpeaking(false); return; }
-    const utterance = new SpeechSynthesisUtterance("This is your LifeOS preview. AI is not connected yet. You can save a simple task or add details in Tasks.");
-    utterance.lang = "en-IN"; utterance.onend = utterance.onerror = () => setSpeaking(false);
-    window.speechSynthesis.cancel(); setSpeaking(true); window.speechSynthesis.speak(utterance);
-  }
-
+  const last = messages.at(-1);
   return <div className="two-columns chat-columns"><div className="chat-main">
-    <section className="panel conversation" aria-label="Chat conversation"><p className="eyebrow muted">Example conversation · Sample data</p><div className="user-message">Finish my DBMS report by Friday. I think it needs 3 hours. Also, leave my evenings free.</div><div className="assistant-message"><p className="eyebrow blue">LifeOS · Example reply</p><p>Got it, {name}. I’ve added your report and kept your evenings clear. Here’s a comfortable start.</p>{sampleTask ? <TaskCard task={sampleTask} /> : <p className="muted">The sample task has been removed.</p>}<Link href="/tasks" className="text-button">Edit task <span aria-hidden="true">↗</span></Link><p className="muted">You usually focus best in the morning.<br />Keep your focus hours protected in your preferences.</p><Link href="/profile" className="button">Set focus hours</Link></div>
+    <section className="panel conversation" aria-label="Chat conversation">
+      {messages.length === 0 ? <div className="chat-empty"><p className="eyebrow blue">LifeOS</p><h2>Hi {name.first}. What’s on your mind?</h2><p className="muted">Add tasks and events, ask what’s next, check if something fits, or set your working hours. Every change can be undone for a few seconds.</p></div> : null}
       <div className="message-log" role="log" aria-live="polite" aria-relevant="additions">{messages.map(message => {
-        const task = tasks.find(t => t.id === message.taskId);
-        return <div key={message.id} className="message-pair"><div className="user-message">{message.text}</div><div className="assistant-message"><p className="eyebrow blue">LifeOS · Demo</p><p>{previewReply}</p>{task ? <><TaskCard task={task} /><button className="text-button" onClick={() => { deleteTask(task.id); setMessages(current => current.map(m => m.id === message.id ? { ...m, taskId: undefined, undone: true } : m)); }}>Undo task creation</button></> : <div className="button-row">{message.text.length <= 120 ? <button className="button secondary" onClick={() => saveMessage(message)}>{message.undone ? "Save as task again" : "Save as simple task"}</button> : <p className="muted">Use a title under 120 characters in the task form.</p>}<Link className="text-button" href="/tasks">Add task details ↗</Link></div>}</div></div>;
+        const response = message.response;
+        const choice = response?.confirmation ? { label: response.confirmation.prompt, options: response.confirmation.options } : response?.clarification ? { label: response.clarification.question, options: response.clarification.options } : null;
+        const isLast = message.id === last?.id;
+        return <div key={message.id} className="message-pair"><div className="user-message">{message.text}</div><div className="assistant-message">
+          <p className="eyebrow blue">LifeOS</p>
+          {message.status === "sending" ? <p className="muted" role="status">Thinking…</p> : null}
+          {message.status === "error" ? <><p className="error-message" role="alert">{message.error}</p><button className="button secondary" onClick={() => deliver(message)} disabled={sending}>Try again</button></> : null}
+          {response ? <>
+            <p>{response.reply}</p>
+            {response.fallback ? <p className="muted fallback-note">The assistant is unavailable right now, so this was handled by quick add.</p> : null}
+            {response.actions.map((action, index) => <ActionCard key={action.action_id ?? `${message.id}-${index}`} action={action} />)}
+            {response.conflicts.length ? <div className="conflict-banner compact" role="alert"><b>Heads up:</b> {response.conflicts.map(c => `${formatHours(c.shortfall_min)} short before ${formatDeadline(c.deadline_at, preferences.timezone)}`).join("; ")}.<Link className="text-button" href="/today">See options <span aria-hidden="true">↗</span></Link></div> : null}
+            {choice?.options.length ? <div className="chip-row" role="group" aria-label={choice.label || "Choose an answer"}>{choice.options.map(option => <button key={option} className="chip" disabled={!isLast || sending} onClick={() => send(option)}>{option}</button>)}</div> : null}
+          </> : null}
+        </div></div>;
       })}</div><div ref={end} />
     </section>
-    <form className="panel composer" onSubmit={submit}><label className="sr-only" htmlFor="chat-message">Your message</label><textarea readOnly={voice.listening} ref={input} id="chat-message" value={text} onChange={e => setText(e.target.value)} maxLength={1000} rows={2} placeholder={voice.listening ? "Listening… your words appear here" : "Tell me what’s on your mind…"} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }} /><div className="composer-bottom"><span>{voice.listening ? "Listening · Review before sending" : "Text or voice · You’re in control"}</span><div className="button-row"><button type="button" className={`mic-button ${voice.listening ? "listening" : ""}`} aria-label={voice.listening ? "Stop listening" : "Use voice input"} onClick={() => voice.toggle(text)}><span aria-hidden="true">{voice.listening ? "■" : "◉"}</span></button><button type="submit" className="button" disabled={!text.trim() || voice.listening}>Send message <span aria-hidden="true">↑</span></button></div></div><small className="composer-note">Demo chat · Messages stay in this tab. Tasks save on this device.</small></form>
-    {voice.error ? <p className="error-message" role="alert">{voice.error}</p> : null}
-  </div><aside className="side-stack"><section className={`panel dark voice-panel ${voice.listening ? "is-listening" : ""}`}><Orbit variant="voice" /><div className="voice-copy"><p className="eyebrow lime">{voice.listening ? "I’m listening" : "Your personal assistant"}</p><h2>A little help, just a word away.</h2><p>{voice.listening ? "Speak naturally. Tap again to stop." : "Tap to talk. Review before sending."}</p><button className="button" onClick={() => voice.toggle(text)}>{voice.listening ? "Stop listening" : "Start speaking"}<span aria-hidden="true">{voice.listening ? "■" : "◉"}</span></button><small>{voice.supported === false ? "Voice is unavailable here. The text input still works." : "Up to 30 seconds · Microphone permission required"}</small></div></section>
-      <section className="panel prompts"><h2 className="eyebrow muted">Try asking</h2>{prompts.map(prompt => <button key={prompt} disabled={voice.listening} onClick={() => { setText(prompt); input.current?.focus(); }}>“{prompt}” <span aria-hidden="true">↗</span></button>)}</section>
-      <button className="text-button read-reply" onClick={readReply}>{speaking ? "Stop spoken preview ■" : "Listen to a spoken preview ◉"}</button><p className="voice-disclosure">Your browser’s speech service may process microphone audio. LifeOS does not record or store audio.</p>
+    <form className="panel composer" onSubmit={submit}><label className="sr-only" htmlFor="chat-message">Your message</label><textarea ref={input} id="chat-message" value={text} onChange={e => setText(e.target.value)} maxLength={1000} rows={2} placeholder="Tell me what’s on your mind…" onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }} /><div className="composer-bottom"><span>{text.length}/1000 · Enter to send, Shift+Enter for a new line</span><button type="submit" className="button" disabled={!text.trim() || sending}>{sending ? "Sending…" : "Send message"} <span aria-hidden="true">↑</span></button></div></form>
+  </div><aside className="side-stack">
+      <section className="panel prompts"><h2 className="eyebrow muted">Try asking</h2>{prompts.map(prompt => <button key={prompt} disabled={sending} onClick={() => { setText(prompt); input.current?.focus(); }}>“{prompt}” <span aria-hidden="true">↗</span></button>)}</section>
+      <section className="panel chat-help"><h2 className="eyebrow muted">Good to know</h2><p>Deletes and changes to more than three items ask you first. Reply with the buttons or type “yes” or “no”.</p><p>Messages on this screen clear when you leave it. Your tasks, events and preferences are saved to your account.</p></section>
     </aside></div>;
 }
