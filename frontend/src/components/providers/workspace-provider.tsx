@@ -4,6 +4,7 @@ import { createContext, useContext, useEffect, useRef, useState, type ReactNode 
 import { defaultPreferences, demoTasks } from "@/lib/demo-data";
 import { parseWorkspace, validatePreferences, validateTask } from "@/lib/task-utils";
 import type { Preferences, Task, TaskInput } from "@/lib/types";
+import { workspaceStorageKey } from "@/lib/workspace-storage";
 
 type Workspace = {
   tasks: Task[]; preferences: Preferences; ready: boolean; notice: string;
@@ -14,9 +15,9 @@ type Workspace = {
   savePreferences: (preferences: Preferences) => void;
 };
 const Context = createContext<Workspace | null>(null);
-const key = "lifeos.workspace.v1";
 
-export function WorkspaceProvider({ children }: { children: ReactNode }) {
+export function WorkspaceProvider({ children, userId }: { children: ReactNode; userId: string }) {
+  const key = workspaceStorageKey(userId);
   const [tasks, setTasks] = useState<Task[]>(demoTasks);
   const [preferences, setPreferences] = useState(defaultPreferences);
   const [ready, setReady] = useState(false);
@@ -32,13 +33,13 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       notify("Saved data could not be loaded. Demo data is shown; the original data has not been overwritten.");
     }
     setReady(true);
-  }, []);
+  }, [key]);
 
   useEffect(() => {
     if (!ready || !canPersist.current) return;
     try { localStorage.setItem(key, JSON.stringify({ version: 1, tasks, preferences })); }
     catch { notify("Browser storage is unavailable. Keep this tab open; changes will not survive a reload."); }
-  }, [tasks, preferences, ready]);
+  }, [tasks, preferences, ready, key]);
 
   function saveTask(input: TaskInput, id?: string) {
     const error = validateTask(input);
