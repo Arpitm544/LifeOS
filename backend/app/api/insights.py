@@ -9,7 +9,8 @@ from ..auth import current_user_id
 from ..db import get_session
 from ..models import Suggestion
 from ..schemas_insights import InsightsResponse
-from ..services.insight_service import apply_suggestion, compute_user_insights, latest_suggestions
+from ..services.insight_service import (apply_suggestion, compute_user_insights, generate_suggestions,
+                                        store_suggestions, todays_suggestions)
 from ..services.llm_client import configured_llm
 
 router = APIRouter(prefix="/api/insights", tags=["insights"])
@@ -23,7 +24,12 @@ def suggestion_out(row: Suggestion) -> dict:
 async def insights(session: AsyncSession = Depends(get_session), user_id=Depends(current_user_id)) -> InsightsResponse:
     now = datetime.now(timezone.utc)
     data = await compute_user_insights(session, user_id, now=now)
-    rows = await latest_suggestions(session, user_id, data, now=now, llm=configured_llm())
+    rows = await todays_suggestions(session, user_id, now=now)
+    if rows is None:
+        # Release the connection while the (optional) wording call runs.
+        await session.commit()
+        items = await generate_suggestions(data, configured_llm())
+        rows = await store_suggestions(session, user_id, items, now=now) if items else []
     await session.commit()
     return InsightsResponse(**data, suggestions=[suggestion_out(row) for row in rows])
 

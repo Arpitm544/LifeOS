@@ -59,6 +59,11 @@ def iso(moment):
     return moment.isoformat()
 
 
+def phrase(moment):
+    # The words a user would say, which the validator re-parses (dual date check).
+    return 'by ' + moment.strftime('%d %B %Y')
+
+
 def test_tool_definitions_cover_every_prd_intent():
     names = {tool['name'] for tool in tool_definitions()}
     assert names == {'create_task', 'update_task', 'complete_task', 'delete_task', 'create_event',
@@ -71,7 +76,7 @@ def test_brain_dump_creates_several_items_with_defaults_and_conflict_check():
         now = datetime.now(timezone.utc)
         friday = (now + timedelta(days=3)).replace(hour=23, minute=59, second=0, microsecond=0)
         llm = RecordedLLM(LLMResponse('Added your tasks.', [
-            call('create_task', title='Finish DBMS report', deadline_iso=iso(friday), effort_min=180,
+            call('create_task', title='Finish DBMS report', deadline_iso=iso(friday), deadline_phrase=phrase(friday), effort_min=180,
                  importance=4, category='study', confidence='high'),
             call('create_task', title='Call mom', category='social', confidence='high'),
             call('create_event', title='Dentist', start_iso=iso(now + timedelta(days=1)), duration_min=45),
@@ -182,7 +187,8 @@ def test_duplicate_guard_offers_instead_of_creating():
         session.add(Task(user_id=OWNER, title='Pay rent', deadline_at=deadline, created_at=datetime.now(timezone.utc)))
         await session.commit()
         llm = RecordedLLM(LLMResponse('', [call('create_task', title='Pay rent', category='finance',
-                                                deadline_iso=iso(deadline + timedelta(hours=3)))]))
+                                                deadline_iso=iso(deadline + timedelta(hours=3)),
+                                                deadline_phrase=phrase(deadline + timedelta(hours=3)))]))
         result = await handle_chat(session, user_id=OWNER, text='pay rent', client_tz='UTC', llm=llm)
         assert not result['actions'] and 'already have' in result['confirmation']['prompt']
         assert len((await session.execute(select(Task))).scalars().all()) == 1
@@ -193,7 +199,8 @@ def test_custom_reminder_overrides_rules():
     async def body(session):
         now = datetime.now(timezone.utc)
         llm = RecordedLLM(LLMResponse('', [call('create_task', title='Start report', category='study',
-            deadline_iso=iso(now + timedelta(days=2)), remind_at_iso=iso(now + timedelta(minutes=1)))]))
+            deadline_iso=iso(now + timedelta(days=2)), deadline_phrase=phrase(now + timedelta(days=2)),
+            remind_at_iso=iso(now + timedelta(minutes=1)), remind_at_phrase='in 1 minute')]))
         result = await handle_chat(session, user_id=OWNER, text='remind me', client_tz='UTC', llm=llm)
         pending = (await session.execute(select(Reminder).where(Reminder.status == 'pending'))).scalars().all()
         assert [r.kind for r in pending] == ['custom']
@@ -224,7 +231,11 @@ def test_set_preference_merges_and_query_and_plan_day_answer_from_code():
         plan = await handle_chat(session, user_id=OWNER, text='plan my day', client_tz='UTC', llm=llm)
         await session.commit()
         assert plan['actions'][0]['type'] == 'plan_generated'
-        assert (await session.execute(select(PlanBlock))).scalars().all() or plan['actions'][0]['unplaced_task_ids']
+        # The 60-minute Essay is due tomorrow and fits in today's working hours.
+        essay = (await session.execute(select(Task).where(Task.title == 'Essay'))).scalar_one()
+        blocks = (await session.execute(select(PlanBlock).where(PlanBlock.task_id == essay.id))).scalars().all()
+        assert sum(int((b.end_at - b.start_at).total_seconds() // 60) for b in blocks) == 60
+        assert not plan['actions'][0]['unplaced_task_ids']
         before = len((await session.execute(select(Task))).scalars().all())
         capacity = await handle_chat(session, user_id=OWNER, text='can I take it', client_tz='UTC', llm=llm)
         assert capacity['actions'][0]['type'] == 'capacity_check'
@@ -262,3 +273,75 @@ def test_trigram_reference_scores():
     assert similarity('report', 'report') == 1
     assert reference_score('the report', 'Finish DBMS report') >= 0.6
     assert reference_score('groceries', 'Finish DBMS report') < 0.3
+
+
+def test_yes_with_more_words_is_a_new_request_not_a_confirmation():
+    async def body(session):
+        session.add(Task(user_id=OWNER, title='Dentist booking', created_at=datetime.now(timezone.utc)))
+        await session.commit()
+        llm = RecordedLLM(LLMResponse('', [call('delete_task', task_ref='dentist')]),
+                          LLMResponse('Sure.', [call('query_schedule', filter='due')]))
+        await handle_chat(session, user_id=OWNER, text='cancel the dentist', client_tz='UTC', llm=llm)
+        await session.commit()
+        result = await handle_chat(session, user_id=OWNER, text="yes, and what's due this week?", client_tz='UTC', llm=llm)
+        assert [a['type'] for a in result['actions']] == ['schedule']
+        assert (await session.execute(select(Task))).scalar_one().status == 'open'
+    run_with_session(body)
+
+
+def test_uncertain_write_calls_ask_instead_of_writing():
+    async def body(session):
+        session.add(Task(user_id=OWNER, title='Report', created_at=datetime.now(timezone.utc)))
+        await session.commit()
+        llm = RecordedLLM(LLMResponse('', [call('update_task', task_ref='report', importance=5, confidence='low'),
+                                           call('create_event', title='Sync', start_iso=iso(datetime.now(timezone.utc) + timedelta(days=1)),
+                                                missing_fields=['end time'])]))
+        result = await handle_chat(session, user_id=OWNER, text='?', client_tz='UTC', llm=llm)
+        assert not result['actions'] and result['clarification']
+        assert (await session.execute(select(Task))).scalar_one().importance == 3
+        assert not (await session.execute(select(Event))).scalars().all()
+    run_with_session(body)
+
+
+def test_past_reminder_on_update_writes_nothing_and_undo_cancels_custom_reminder():
+    async def body(session):
+        from uuid import UUID
+        from app.services.domain_service import undo_logged_action
+        now = datetime.now(timezone.utc)
+        session.add(Task(user_id=OWNER, title='Report', created_at=now))
+        await session.commit()
+        llm = RecordedLLM(
+            LLMResponse('', [call('update_task', task_ref='report', importance=5,
+                                  remind_at_iso=iso(now - timedelta(hours=1)), remind_at_phrase='an hour ago')]),
+            LLMResponse('', [call('update_task', task_ref='report', remind_at_iso=iso(now + timedelta(minutes=5)),
+                                  remind_at_phrase='in 5 minutes')]))
+        rejected = await handle_chat(session, user_id=OWNER, text='remind me', client_tz='UTC', llm=llm)
+        assert not rejected['actions'] and (await session.execute(select(Task))).scalar_one().importance == 3
+        result = await handle_chat(session, user_id=OWNER, text='remind me in 5', client_tz='UTC', llm=llm)
+        await session.commit()
+        assert result['actions'][0]['action_id']  # reminder-only edits are undoable
+        await undo_logged_action(session, OWNER, UUID(result['actions'][0]['action_id']))
+        await session.commit()
+        kinds = {r.kind for r in (await session.execute(select(Reminder).where(Reminder.status == 'pending'))).scalars()}
+        assert 'custom' not in kinds
+    run_with_session(body)
+
+
+def test_capacity_check_rejects_out_of_range_deadlines_and_bad_plan_dates():
+    async def body(session):
+        now = datetime.now(timezone.utc)
+        llm = RecordedLLM(
+            LLMResponse('', [call('check_capacity', title='Job', effort_min=60, deadline_iso=iso(now - timedelta(days=1)))]),
+            LLMResponse('', [call('check_capacity', title='Job', effort_min=60, deadline_iso=iso(now + timedelta(days=60)))]),
+            LLMResponse('', [call('plan_day', date='2026-02-30')]))
+        for _ in range(3):
+            result = await handle_chat(session, user_id=OWNER, text='?', client_tz='UTC', llm=llm)
+            assert not result['actions'] and result['clarification']['question']
+    run_with_session(body)
+
+
+def test_deadline_without_phrase_is_rejected():
+    from app.services.nlu_validator import CreateTaskCall, validate_create_task
+    now = datetime(2026, 11, 16, 9, tzinfo=timezone.utc)
+    call_args = CreateTaskCall(title='Report', category='study', deadline_iso=now + timedelta(days=2))
+    assert validate_create_task(call_args, now=now, timezone='UTC')

@@ -44,7 +44,7 @@ def validate_suggestions(raw: list[dict], stats: dict) -> list[Suggestion]:
         if not isinstance(item, dict) or not isinstance(item.get('text'), str):
             continue
         kind, text = item.get("type"), item['text'].strip()
-        if kind not in ALLOWED_SUGGESTION_TYPES or not text:
+        if kind not in ALLOWED_SUGGESTION_TYPES or not text or len(text) > 500:
             continue
         numbers = re.findall(r"\d+(?:\.\d+)?", text)
         if any(number not in allowed_numbers for number in numbers):
@@ -75,13 +75,14 @@ async def compute_user_insights(session, user_id, *, now: datetime | None = None
     recent_samples = [CompletedTask(task.category, task.effort_est_min, task.effort_actual_min or task.effort_est_min,
                                     _utc(task.completed_at).astimezone(zone).hour) for task in recent_done]
     blocks = list((await session.execute(select(PlanBlock).where(PlanBlock.user_id == user_id,
-        PlanBlock.plan_date >= since, PlanBlock.end_at <= now))).scalars())
-    planned, completed_blocks = len(blocks), 0
-    for block in blocks:
-        if block.status == 'done' and _utc(block.end_at).astimezone(zone).date() == _utc(block.plan_date).astimezone(zone).date():
-            completed_blocks += 1
+        PlanBlock.end_at >= since, PlanBlock.end_at <= now))).scalars())
+    # Blocks carry no completion time, so every done block counts (including
+    # ones that cross local midnight).
+    planned = len(blocks)
+    completed_blocks = sum(1 for block in blocks if block.status == 'done')
     deadline_tasks = list((await session.execute(select(Task).where(Task.user_id == user_id,
-        Task.deadline_at.is_not(None), Task.deadline_at >= since, Task.deadline_at <= now))).scalars())
+        Task.deadline_at.is_not(None), Task.deadline_at >= since, Task.deadline_at <= now,
+        Task.status != 'dropped'))).scalars())
     overdue: dict[str, list[int]] = defaultdict(lambda: [0, 0])
     for task in deadline_tasks:
         overdue[task.category][1] += 1
@@ -96,7 +97,10 @@ async def compute_user_insights(session, user_id, *, now: datetime | None = None
     snooze_events = list((await session.execute(select(ActivityEvent).where(ActivityEvent.user_id == user_id,
         ActivityEvent.type == 'reminder_snoozed', ActivityEvent.occurred_at >= since))).scalars())
     for event in snooze_events:
-        category = (event.payload or {}).get('category', 'other')
+        payload = event.payload or {}
+        if payload.get('kind') == 'event' or not payload.get('category'):
+            continue  # only task reminders are in the denominator
+        category = payload['category']
         snoozes[category][0] += 1
         snoozes[category][1] = max(snoozes[category][1], snoozes[category][0])
     summary = compute_insights(completed=samples, planned_blocks=planned, completed_blocks=completed_blocks,
@@ -163,7 +167,7 @@ def template_suggestions(insights: dict, stats: dict) -> list[dict]:
     if insights['focus_windows']:
         start, end = insights['focus_windows'][0]
         output.append({'type': 'move_focus_window', 'text': 'You finish the most work in your top focus window. '
-                       'Protect it for deep work?', 'payload': {'windows': [[f'{start:02d}:00', f'{end:02d}:00']]}})
+                       'Protect it for deep work?', 'payload': {'windows': [[f'{start:02d}:00', '23:59' if end >= 24 else f'{end:02d}:00']]}})
     return output[:3]
 
 
@@ -171,7 +175,8 @@ async def generate_suggestions(insights: dict, llm=None) -> list[dict]:
     stats = flat_stats(insights)
     templates = template_suggestions(insights, stats)
     payload_by_type = {item['type']: item['payload'] for item in templates}
-    if llm is not None and hasattr(llm, 'write'):
+    # The LLM may only reword suggestions code can back; with none, skip the call.
+    if templates and llm is not None and hasattr(llm, 'write'):
         from .llm_client import INSIGHT_PROMPT
         try:
             text = await llm.write(system=INSIGHT_PROMPT, payload=stats)
@@ -186,13 +191,29 @@ async def generate_suggestions(insights: dict, llm=None) -> list[dict]:
     return templates
 
 
+async def todays_suggestions(session, user_id, *, now: datetime) -> list[StoredSuggestion] | None:
+    """Suggestions generated in the last 24 h, or None when none were generated."""
+    rows = list((await session.execute(select(StoredSuggestion).where(StoredSuggestion.user_id == user_id,
+        StoredSuggestion.created_at >= now - timedelta(hours=24)).order_by(StoredSuggestion.created_at))).scalars())
+    return [row for row in rows if row.status == 'active'] if rows else None
+
+
+async def store_suggestions(session, user_id, items: list[dict], *, now: datetime) -> list[StoredSuggestion]:
+    created = []
+    for item in items:
+        row = StoredSuggestion(user_id=user_id, type=item['type'], text=item['text'], payload=item['payload'],
+                               status='active', created_at=now)
+        session.add(row)
+        created.append(row)
+    await session.flush()
+    return created
+
+
 async def latest_suggestions(session, user_id, insights: dict, *, now: datetime, llm=None) -> list[StoredSuggestion]:
     """Reuse today's suggestions; generate at most once per day (or on demand)."""
-    day_start = now - timedelta(hours=24)
-    rows = list((await session.execute(select(StoredSuggestion).where(StoredSuggestion.user_id == user_id,
-        StoredSuggestion.created_at >= day_start).order_by(StoredSuggestion.created_at))).scalars())
-    if rows:
-        return [row for row in rows if row.status == 'active']
+    cached = await todays_suggestions(session, user_id, now=now)
+    if cached is not None:
+        return cached
     created = []
     for item in await generate_suggestions(insights, llm):
         row = StoredSuggestion(user_id=user_id, type=item['type'], text=item['text'], payload=item['payload'],

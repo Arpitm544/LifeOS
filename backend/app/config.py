@@ -27,8 +27,15 @@ class Settings(BaseSettings):
     vapid_public_key: str = ""
     vapid_private_key: str = ""
     vapid_subject: str = "mailto:admin@example.com"
+    # Push services browsers use; subscriptions to any other host are refused.
+    push_allowed_hosts: str = ("fcm.googleapis.com,updates.push.services.mozilla.com,push.services.mozilla.com,"
+                               "notify.windows.com,push.apple.com")
     worker_poll_seconds: int = Field(default=30, ge=5, le=300)
     model_config = SettingsConfigDict(env_file=Path(__file__).resolve().parents[1] / '.env', extra="ignore")
+
+    @property
+    def push_allowed_host_list(self) -> list[str]:
+        return [host.strip().lower() for host in self.push_allowed_hosts.split(',') if host.strip()]
 
     @property
     def cors_origin_list(self) -> list[str]:

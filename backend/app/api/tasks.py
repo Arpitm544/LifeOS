@@ -122,6 +122,7 @@ async def delete_task(task_id: UUID, confirmed: bool = False, session: AsyncSess
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
     await drop_task(session, user_id, task)
+    await detect_conflicts(session, user_id)
     await session.commit()
 
 
@@ -146,6 +147,8 @@ async def record_actual_effort(task_id: UUID, payload: ActualEffort, session: As
     before = snapshot(task)
     task.effort_actual_min = payload.minutes if factor is None else round(task.effort_est_min * factor)
     await audit(session, user_id, task, before, 'effort')
+    await recalculate_priorities(session, user_id)
+    await detect_conflicts(session, user_id)
     await session.commit()
     await session.refresh(task)
     return task

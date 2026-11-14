@@ -24,7 +24,8 @@ from .domain_service import audit, snapshot
 from .llm_client import FallbackLLMClient, LLMClient, LLMResponse, LLMUnavailable, configured_llm
 from .nlu_validator import (TOOL_SCHEMAS, WRITE_TOOLS, CheckCapacityCall, CompleteTaskCall, CreateEventCall,
                             CreateTaskCall, DeleteTaskCall, PlanDayCall, QueryScheduleCall, SetPreferenceCall,
-                            ToolCall, UpdateTaskCall, check_phrase, format_local, validate_create_task)
+                            ToolCall, UpdateTaskCall, check_phrase, format_local, validate_create_task,
+                            validate_deadline, validate_reminder)
 from .planning_service import CATEGORY_DEFAULT_EFFORT, active_preferences, calendar_slots, detect_conflicts, \
     evaluate, load_state, minutes_until, rebuild_plan, recalculate_priorities
 from .quick_add import parse_quick_add
@@ -32,10 +33,12 @@ from .scheduler import BusyBlock
 from .task_service import complete_task_row, create_task, drop_task, latest_action, set_custom_reminder
 from .text_match import is_pronoun, rank, similarity
 
-YES = re.compile(r"^\s*(yes|y|yeah|yep|sure|ok|okay|go ahead|do it|confirm|create anyway|please do)\b", re.I)
-NO = re.compile(r"^\s*(no|nope|cancel|stop|don'?t|never mind|nevermind)\b", re.I)
+# The whole message must be the answer; "yes, and also..." goes to the LLM.
+YES = re.compile(r"^\s*(yes|y|yeah|yep|sure|ok|okay|go ahead|do it|confirm|create anyway|please do)\s*[.!]*\s*$", re.I)
+NO = re.compile(r"^\s*(no|nope|cancel|stop|don'?t|never mind|nevermind)\s*[.!]*\s*$", re.I)
 UNDO_SECONDS = 10
 MAX_OPEN_TASKS_IN_CONTEXT = 30
+MAX_CAPACITY_DAYS = 30  # routine expansion is bounded to 31 days
 
 
 @dataclass
@@ -202,17 +205,20 @@ async def quick_add_reply(session, user_id, text, ctx: ChatContext, started) -> 
     try:
         parsed = parse_quick_add(text, now=ctx.now, timezone=ctx.timezone_name)
     except ValueError as exc:
-        return {'message_id': None, 'reply': str(exc), 'actions': [], 'conflicts': [],
+        message_id = await record_messages(session, user_id, text, str(exc), ctx, Outcome(), None, started)
+        return {'message_id': str(message_id), 'reply': str(exc), 'actions': [], 'conflicts': [],
                 'clarification': {'question': str(exc), 'options': []}, 'confirmation': None, 'fallback': True}
     task = await create_task(session, user_id, TaskCreate(title=parsed['title'][:120], deadline_at=parsed['deadline_at']))
     await session.flush()
     action = await latest_action(session, user_id, task.id)
+    conflicts = await detect_conflicts(session, user_id, now=ctx.now)
     outcome = Outcome(last_touched=task.id)
     reply = f"Saved to Inbox: {task.title}"
     message_id = await record_messages(session, user_id, text, reply, ctx, outcome, None, started)
     return {'message_id': str(message_id), 'reply': reply,
             'actions': [action_card('task_created', action, task, ctx)],
-            'conflicts': [], 'clarification': None, 'confirmation': None, 'fallback': True}
+            'conflicts': [conflict_card(row) for row in conflicts], 'clarification': None,
+            'confirmation': None, 'fallback': True}
 
 
 def action_card(kind: str, log, task: Optional[Task], ctx: ChatContext, **extra) -> dict:
@@ -248,6 +254,10 @@ async def execute_calls(session, user_id, ctx: ChatContext, calls: list[ToolCall
                                           + '; '.join(names) + '. Go ahead?', 'options': ['Yes', 'No']}
         return
     for call, args in parsed:
+        if call.name in WRITE_TOOLS and (args.confidence == 'low' or args.missing_fields):
+            missing = ', '.join(args.missing_fields) if args.missing_fields else 'the details'
+            outcome.clarify(f'Could you tell me {missing}?')
+            continue
         handler = HANDLERS[call.name]
         try:
             await handler(session, user_id, ctx, args, outcome, confirmed)
@@ -320,37 +330,32 @@ async def handle_update_task(session, user_id, ctx, args: UpdateTaskCall, outcom
     if task is None:
         outcome.clarify(question['question'], question['options'])
         return
-    if args.deadline_phrase and args.deadline_iso is None:
-        outcome.clarify(f'Which date do you mean for {task.title}?')
-        return
-    problem = check_phrase(args.deadline_iso, args.deadline_phrase, now=ctx.now, timezone=ctx.timezone_name) \
-        or check_phrase(args.remind_at_iso, args.remind_at_phrase, now=ctx.now, timezone=ctx.timezone_name)
+    # Validate everything before touching the task, so a rejected part writes nothing.
+    problem = validate_deadline(args.deadline_iso, args.deadline_phrase, now=ctx.now, timezone=ctx.timezone_name) \
+        or validate_reminder(args.remind_at_iso, args.remind_at_phrase, now=ctx.now, timezone=ctx.timezone_name)
     if problem:
         outcome.clarify(problem)
-        return
-    if args.deadline_iso and args.deadline_iso < ctx.now:
-        outcome.clarify('That date is in the past. What future date should I use?')
         return
     changes = {'title': args.title, 'deadline_at': args.deadline_iso, 'effort_est_min': args.effort_min,
                'importance': args.importance, 'category': args.category.value if args.category else None,
                'pinned': args.pinned}
     changes = {key: value for key, value in changes.items() if value is not None}
-    log = None
-    if changes:
-        before = snapshot(task)
-        for key, value in changes.items():
-            setattr(task, key, value.strip() if isinstance(value, str) and key == 'title' else value)
-        await recalculate_priorities(session, user_id, ctx.now)
-        log = await audit(session, user_id, task, before, 'update')
-    if args.remind_at_iso:
-        if args.remind_at_iso < ctx.now:
-            outcome.clarify('That reminder time has passed. When should I remind you?')
-            return
-        await set_custom_reminder(session, user_id, task, args.remind_at_iso)
-        outcome.replies.append(f"I'll remind you {format_local(args.remind_at_iso, ctx.timezone_name)}.")
     if not changes and not args.remind_at_iso:
         outcome.clarify(f'What should I change about {task.title}?')
         return
+    before = snapshot(task)
+    for key, value in changes.items():
+        setattr(task, key, value.strip() if isinstance(value, str) and key == 'title' else value)
+    if changes:
+        await recalculate_priorities(session, user_id, ctx.now)
+    reminder = None
+    if args.remind_at_iso:
+        reminder = await set_custom_reminder(session, user_id, task, args.remind_at_iso)
+        outcome.replies.append(f"I'll remind you {format_local(args.remind_at_iso, ctx.timezone_name)}.")
+    # One undoable action covers both the field edits and the custom reminder.
+    log = await audit(session, user_id, task, before, 'update')
+    if reminder is not None:
+        log.after = {**log.after, '_custom_reminder_id': str(reminder.id)}
     outcome.actions.append(action_card('task_updated', log, task, ctx))
     outcome.wrote, outcome.last_touched = True, task.id
 
@@ -456,7 +461,11 @@ async def handle_query_schedule(session, user_id, ctx, args: QueryScheduleCall, 
 
 
 async def handle_plan_day(session, user_id, ctx, args: PlanDayCall, outcome, confirmed):
-    day = date.fromisoformat(args.date) if args.date else ctx.now.astimezone(ctx.zone).date()
+    try:
+        day = date.fromisoformat(args.date) if args.date else ctx.now.astimezone(ctx.zone).date()
+    except ValueError:
+        outcome.clarify('Which day should I plan?')
+        return
     extra = []
     if args.not_after:
         stop = datetime.combine(day, clock.fromisoformat(args.not_after), tzinfo=ctx.zone).astimezone(timezone.utc)
@@ -485,8 +494,12 @@ async def handle_check_capacity(session, user_id, ctx, args: CheckCapacityCall, 
     if problem:
         outcome.clarify(problem)
         return
-    result = await hypothetical_capacity(session, user_id, title=args.title, effort_min=args.effort_min,
-                                         deadline=args.deadline_iso, now=ctx.now)
+    try:
+        result = await hypothetical_capacity(session, user_id, title=args.title, effort_min=args.effort_min,
+                                             deadline=args.deadline_iso, now=ctx.now)
+    except ValueError as exc:
+        outcome.clarify(str(exc))
+        return
     when = format_local(args.deadline_iso, ctx.timezone_name)
     if result['fits']:
         outcome.replies.append(f"Yes, it fits: {result['free_min'] / 60:.1f} h free before {when}, "
@@ -500,7 +513,12 @@ async def handle_check_capacity(session, user_id, ctx, args: CheckCapacityCall, 
 async def hypothetical_capacity(session, user_id, *, title: str, effort_min: int, deadline: datetime,
                                 now: datetime, category: str = 'other') -> dict:
     """'Can I take this on?' using real free time; nothing is saved (PRD 5.4)."""
-    days = max(1, min(14, (deadline - now).days + 1))
+    if deadline <= now:
+        raise ValueError('That deadline has already passed. Which future date do you mean?')
+    if deadline - now > timedelta(days=MAX_CAPACITY_DAYS):
+        raise ValueError(f'I can check up to {MAX_CAPACITY_DAYS} days ahead. Is there an earlier date?')
+    # The checked window must reach the deadline, or the work would look like it fits.
+    days = max(1, (deadline - now).days + 1)
     state = await load_state(session, user_id, now=now, days=days)
     ghost = Task(id=uuid4(), user_id=user_id, title=title, deadline_at=deadline, effort_est_min=min(effort_min, 600),
                  importance=3, category=category, status='open', priority_score=50, pinned=False, created_at=now)

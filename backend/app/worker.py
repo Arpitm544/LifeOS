@@ -11,19 +11,22 @@ import logging
 import os
 import socket
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import datetime, time, timedelta, timezone
+from uuid import UUID
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import delete, distinct, select, update
+from sqlalchemy import delete, distinct, select, text, update
 
 from .config import get_settings
-from .models import (ActivityEvent, IdempotencyRecord, Message, PlanBlock, Preference, PushSubscription,
-                     Reminder, Task, WorkerStatus)
+from .models import (ActivityEvent, IdempotencyRecord, Message, Preference, PushSubscription, Reminder, Task,
+                     WorkerStatus)
 from .services.push_service import notification_payload, send_to_subscriptions
 
 log = logging.getLogger('lifeos.worker')
 MISSED_AFTER = timedelta(hours=2)
 RATE_WINDOW = timedelta(minutes=10)
+STUCK_SENDING = timedelta(minutes=5)
 MESSAGE_RETENTION = timedelta(days=90)
 ACTIVITY_RETENTION = timedelta(days=180)
 IDEMPOTENCY_RETENTION = timedelta(days=2)
@@ -34,8 +37,24 @@ def _utc(value: datetime) -> datetime:
     return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
 
 
-async def deliver_due(session, settings, *, now: datetime, batch_size: int = 100) -> dict:
-    """One delivery pass. Must run inside a transaction (rows stay locked until commit)."""
+async def _lock_user(session, user_id: str) -> None:
+    # Serializes claims for one user across worker processes (F3.3 rate limit).
+    if session.get_bind().dialect.name == 'postgresql':
+        await session.execute(text('SELECT pg_advisory_xact_lock(7303, hashtext(:owner))'), {'owner': user_id})
+
+
+@dataclass
+class Claim:
+    user_id: str
+    reminder_ids: list[UUID]
+    payload: dict
+    subscriptions: list[PushSubscription]
+
+
+async def claim_due(session, *, now: datetime, batch_size: int = 100) -> tuple[list[Claim], dict]:
+    """Short transaction: mark due reminders 'sending' (one push per user)."""
+    recovered = await session.execute(update(Reminder).where(Reminder.status == 'sending',
+        Reminder.sent_at < now - STUCK_SENDING).values(status='pending', sent_at=None))
     missed = await session.execute(update(Reminder).where(Reminder.status == 'pending',
         Reminder.fire_at < now - MISSED_AFTER).values(status='missed'))
     due = list((await session.execute(select(Reminder).where(Reminder.status == 'pending', Reminder.fire_at <= now)
@@ -43,75 +62,118 @@ async def deliver_due(session, settings, *, now: datetime, batch_size: int = 100
     by_user: dict[str, list[Reminder]] = defaultdict(list)
     for reminder in due:
         by_user[reminder.user_id].append(reminder)
-    sent = deferred = 0
+    claims, deferred = [], 0
     for user_id, items in by_user.items():
+        await _lock_user(session, user_id)
         last = (await session.execute(select(Reminder.sent_at).where(Reminder.user_id == user_id,
             Reminder.sent_at.is_not(None)).order_by(Reminder.sent_at.desc()).limit(1))).scalar_one_or_none()
         if last is not None and now - _utc(last) < RATE_WINDOW:
-            deferred += len(items)  # F3.3: wait, then send these as one summary
+            deferred += len(items)  # wait, then send these as one summary
             continue
+        for reminder in items:
+            reminder.status, reminder.sent_at = 'sending', now
         subscriptions = list((await session.execute(select(PushSubscription).where(
             PushSubscription.user_id == user_id))).scalars())
-        newest = items[-1]
-        result = await send_to_subscriptions(subscriptions, notification_payload(newest, summary_count=len(items)), settings)
-        if result.gone_endpoints:
-            await session.execute(delete(PushSubscription).where(PushSubscription.user_id == user_id,
-                PushSubscription.endpoint.in_(result.gone_endpoints)))
-        # In-app fallback (F3.5): a sent reminder shows in the notification centre
-        # and on Today even when no push subscription exists.
-        for reminder in items:
-            reminder.status, reminder.sent_at = 'sent', now
-        sent += len(items)
+        claims.append(Claim(user_id, [item.id for item in items],
+                            notification_payload(items[-1], summary_count=len(items)), subscriptions))
     await session.flush()
-    return {'sent': sent, 'deferred': deferred, 'missed': missed.rowcount or 0}
+    return claims, {'deferred': deferred, 'missed': missed.rowcount or 0, 'recovered': recovered.rowcount or 0}
 
 
-async def rescore_all(session, *, now: datetime) -> int:
+async def deliver_due(factory, settings, *, now: datetime, batch_size: int = 100) -> dict:
+    """Claim, send with no transaction open, then record the outcome."""
+    async with factory() as session, session.begin():
+        claims, report = await claim_due(session, now=now, batch_size=batch_size)
+    outcomes = []
+    for claim in claims:
+        result = await send_to_subscriptions(claim.subscriptions, claim.payload, settings)
+        outcomes.append((claim, result))
+    sent = retry = 0
+    async with factory() as session, session.begin():
+        for claim, result in outcomes:
+            if result.gone_endpoints:
+                await session.execute(delete(PushSubscription).where(PushSubscription.user_id == claim.user_id,
+                    PushSubscription.endpoint.in_(result.gone_endpoints)))
+            if result.failed and not result.sent:
+                # Transient push failure: retry on a later cycle (still visible in-app).
+                await session.execute(update(Reminder).where(Reminder.id.in_(claim.reminder_ids),
+                    Reminder.status == 'sending').values(status='pending', sent_at=None))
+                retry += len(claim.reminder_ids)
+            else:
+                # Delivered, or no push possible: shown in the notification centre and Today (F3.5).
+                await session.execute(update(Reminder).where(Reminder.id.in_(claim.reminder_ids),
+                    Reminder.status == 'sending').values(status='sent'))
+                sent += len(claim.reminder_ids)
+    return {'sent': sent, 'retry': retry, **report}
+
+
+async def _users_with_open_tasks(factory) -> list[str]:
+    async with factory() as session:
+        return list((await session.execute(select(distinct(Task.user_id)).where(
+            Task.status.in_(['open', 'blocked'])))).scalars())
+
+
+async def _per_user(factory, job: str, users: list[str], function) -> dict:
+    """One transaction per user, so one bad record cannot block other tenants."""
+    done = failed = 0
+    for user_id in users:
+        try:
+            async with factory() as session, session.begin():
+                done += bool(await function(session, user_id))
+        except Exception:
+            failed += 1
+            log.exception('%s failed for one user', job)  # no ids or text beyond the job name
+    return {'users': len(users), 'done': done, 'failed': failed}
+
+
+async def rescore_all(factory, *, now: datetime) -> dict:
     from .services.planning_service import recalculate_priorities
-    users = list((await session.execute(select(distinct(Task.user_id)).where(
-        Task.status.in_(['open', 'blocked'])))).scalars())
-    for user_id in users:
+
+    async def rescore(session, user_id):
         await recalculate_priorities(session, user_id, now)
-    return len(users)
+        return True
+    return await _per_user(factory, 'rescore', await _users_with_open_tasks(factory), rescore)
 
 
-async def daily_plans(session, *, now: datetime) -> int:
-    """At each user's start time, build today's plan and queue a 'plan ready' push."""
+async def plan_today(session, user_id: str, *, now: datetime) -> bool:
+    """At the user's start time, build today's plan once and queue a 'plan ready' push."""
     from .services.planning_service import rebuild_plan
-    created = 0
-    users = list((await session.execute(select(distinct(Task.user_id)).where(
-        Task.status.in_(['open', 'blocked'])))).scalars())
-    for user_id in users:
-        prefs = {row.key: row.value for row in (await session.execute(select(Preference).where(
-            Preference.user_id == user_id, Preference.status == 'active'))).scalars()}
-        zone = ZoneInfo(prefs.get('timezone', {}).get('name', 'UTC'))
-        local = now.astimezone(zone)
-        start = time.fromisoformat(prefs.get('work_hours', {}).get('start', '')) if prefs.get('work_hours') else DEFAULT_PLAN_TIME
-        plan_time = min(start, DEFAULT_PLAN_TIME)
-        if local.time() < plan_time:
-            continue
-        midnight = datetime.combine(local.date(), time.min, tzinfo=zone).astimezone(timezone.utc)
-        exists = (await session.execute(select(Reminder.id).where(Reminder.user_id == user_id,
-            Reminder.kind == 'daily_plan', Reminder.fire_at >= midnight))).first()
-        if exists:
-            continue
-        result = await rebuild_plan(session, user_id, now=now)
-        today = [b for b in result['blocks'] if _utc(b.start_at) < midnight + timedelta(days=1)]
-        if not today:
-            continue
-        hours = sum((_utc(b.end_at) - _utc(b.start_at)).total_seconds() for b in today) / 3600
-        session.add(Reminder(user_id=user_id, item_type='task', item_id=today[0].task_id, kind='daily_plan',
-            fire_at=now, status='pending',
-            message=f'Your plan for today is ready: {len({b.task_id for b in today})} tasks, {hours:.1f} h of focus.'))
-        created += 1
-    await session.flush()
-    return created
+    prefs = {row.key: row.value for row in (await session.execute(select(Preference).where(
+        Preference.user_id == user_id, Preference.status == 'active'))).scalars()}
+    zone = ZoneInfo(prefs.get('timezone', {}).get('name', 'UTC'))
+    local = now.astimezone(zone)
+    start = time.fromisoformat(prefs['work_hours']['start']) if prefs.get('work_hours') else DEFAULT_PLAN_TIME
+    if local.time() < min(start, DEFAULT_PLAN_TIME):
+        return False
+    midnight = datetime.combine(local.date(), time.min, tzinfo=zone).astimezone(timezone.utc)
+    attempted = (await session.execute(select(ActivityEvent.id).where(ActivityEvent.user_id == user_id,
+        ActivityEvent.type == 'daily_plan_built', ActivityEvent.occurred_at >= midnight))).first()
+    if attempted:
+        return False  # once per local day, even when nothing needed planning
+    session.add(ActivityEvent(user_id=user_id, type='daily_plan_built', occurred_at=now,
+                              payload={'date': local.date().isoformat()}))
+    result = await rebuild_plan(session, user_id, now=now)
+    today = [b for b in result['blocks'] if _utc(b.start_at) < midnight + timedelta(days=1)]
+    if not today:
+        return False
+    hours = sum((_utc(b.end_at) - _utc(b.start_at)).total_seconds() for b in today) / 3600
+    session.add(Reminder(user_id=user_id, item_type='task', item_id=today[0].task_id, kind='daily_plan',
+        fire_at=now, status='pending',
+        message=f'Your plan for today is ready: {len({b.task_id for b in today})} tasks, {hours:.1f} h of focus.'))
+    return True
 
 
-async def retention(session, *, now: datetime) -> dict:
-    messages = await session.execute(delete(Message).where(Message.created_at < now - MESSAGE_RETENTION))
-    activity = await session.execute(delete(ActivityEvent).where(ActivityEvent.occurred_at < now - ACTIVITY_RETENTION))
-    keys = await session.execute(delete(IdempotencyRecord).where(IdempotencyRecord.created_at < now - IDEMPOTENCY_RETENTION))
+async def daily_plans(factory, *, now: datetime) -> dict:
+    async def plan(session, user_id):
+        return await plan_today(session, user_id, now=now)
+    return await _per_user(factory, 'daily_plan', await _users_with_open_tasks(factory), plan)
+
+
+async def retention(factory, *, now: datetime) -> dict:
+    async with factory() as session, session.begin():
+        messages = await session.execute(delete(Message).where(Message.created_at < now - MESSAGE_RETENTION))
+        activity = await session.execute(delete(ActivityEvent).where(ActivityEvent.occurred_at < now - ACTIVITY_RETENTION))
+        keys = await session.execute(delete(IdempotencyRecord).where(IdempotencyRecord.created_at < now - IDEMPOTENCY_RETENTION))
     return {'messages': messages.rowcount or 0, 'activity_events': activity.rowcount or 0,
             'idempotency_records': keys.rowcount or 0}
 
@@ -132,14 +194,20 @@ async def run_cycle(factory, settings, *, name: str, now: datetime | None = None
     now = _utc(now or datetime.now(timezone.utc))
     last_runs = last_runs if last_runs is not None else {}
     report: dict = {}
-    async with factory() as session, session.begin():
-        report['delivery'] = await deliver_due(session, settings, now=now)
+    steps = [('delivery', lambda: deliver_due(factory, settings, now=now))]
     for job, (interval, function) in JOBS.items():
         previous = last_runs.get(job)
         if previous is None or now - previous >= interval:
-            async with factory() as session, session.begin():
-                report[job] = await function(session, now=now)
-            last_runs[job] = now
+            steps.append((job, lambda function=function: function(factory, now=now)))
+    for job, step in steps:
+        # Each job is isolated: one failing job does not skip the rest or the heartbeat.
+        try:
+            report[job] = await step()
+            if job in JOBS:
+                last_runs[job] = now
+        except Exception:
+            log.exception('worker job %s failed', job)
+            report[job] = 'failed'
     async with factory() as session, session.begin():
         await heartbeat(session, name, now=now, jobs={job: value.isoformat() for job, value in last_runs.items()})
     return report

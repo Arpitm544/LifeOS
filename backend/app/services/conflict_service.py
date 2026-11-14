@@ -9,7 +9,7 @@ from sqlalchemy import select
 
 from ..models import Conflict, Preference, Routine, Task
 from .domain_service import audit, snapshot
-from .planning_service import calendar_slots, evaluate, load_state, rebuild_plan
+from .planning_service import busy_with_sources, calendar_slots, evaluate, load_state, rebuild_plan
 from .scheduler import BusyBlock
 
 EXTEND_UNTIL = time(21, 0)
@@ -24,6 +24,34 @@ def _shortfall(conflicts, deadline: datetime) -> int:
         if _utc(item.deadline) == _utc(deadline):
             return item.shortfall_min
     return 0
+
+
+def _in_quiet(moment: time, start: time, end: time) -> bool:
+    if start <= end:
+        return start <= moment < end
+    return moment >= start or moment < end  # overnight, e.g. 22:30-07:30
+
+
+def extension_limit(work_end: time, quiet_start: time, quiet_end: time) -> time:
+    """Latest time up to 21:00 reachable after work without entering quiet hours."""
+    cursor = datetime.combine(datetime.min.date(), work_end)
+    stop = datetime.combine(datetime.min.date(), EXTEND_UNTIL)
+    while cursor < stop and not _in_quiet(cursor.time(), quiet_start, quiet_end):
+        cursor += timedelta(minutes=15)
+    return min(cursor, stop).time() if cursor > datetime.combine(datetime.min.date(), work_end) else work_end
+
+
+def free_destination(block: BusyBlock, deadline: datetime, busy: list[BusyBlock]) -> datetime | None:
+    """Same time of day on the first day after the deadline that is not already booked."""
+    length = block.end - block.start
+    first = (deadline - block.start).days + 1
+    for offset in range(first, first + 7):
+        start = block.start + timedelta(days=offset)
+        if start < deadline:
+            continue
+        if not any(other.start < start + length and start < other.end for other in busy):
+            return start
+    return None
 
 
 def _least_important(task):
@@ -50,17 +78,19 @@ async def simulate_options(session, user_id, conflict: Conflict, *, now: datetim
     # 1. Extend working hours to 21:00 (bounded by quiet hours) on days before D.
     prefs = {row.key: row.value for row in (await session.execute(select(Preference).where(
         Preference.user_id == user_id, Preference.status == 'active'))).scalars()}
-    quiet_start = time.fromisoformat(prefs.get('quiet_hours', {}).get('start', '22:30'))
-    limit = min(EXTEND_UNTIL, quiet_start) if quiet_start > time(12) else EXTEND_UNTIL
+    quiet = prefs.get('quiet_hours', {'start': '22:30', 'end': '07:30'})
+    quiet_start, quiet_end = time.fromisoformat(quiet['start']), time.fromisoformat(quiet['end'])
     overrides = dict(state.overrides)
     local_day = now.astimezone(state.zone).date()
-    extended_days = []
+    extended_days, limit = [], None
     while local_day <= deadline.astimezone(state.zone).date():
         windows = overrides.get(local_day, state.windows)
         start, end = windows[0][0], max(end for _, end in windows)
-        if end < limit:
-            overrides[local_day] = [(start, limit)]
+        day_limit = extension_limit(end, quiet_start, quiet_end)
+        if day_limit > end:
+            overrides[local_day] = [(start, day_limit)]
             extended_days.append(local_day.isoformat())
+            limit = day_limit if limit is None else min(limit, day_limit)
         local_day += timedelta(days=1)
     if extended_days:
         slots = calendar_slots(window_start=now, window_end=state.end, zone=state.zone, windows=state.windows,
@@ -68,7 +98,9 @@ async def simulate_options(session, user_id, conflict: Conflict, *, now: datetim
         blocks, _, conflicts = evaluate(state, slots=slots)
         options.append({'type': 'extend_hours', 'resolves': _shortfall(conflicts, deadline) == 0,
                         'remaining_shortfall_min': _shortfall(conflicts, deadline),
-                        'change': {'dates': extended_days, 'end': limit.strftime('%H:%M')},
+                        'change': {'dates': extended_days, 'end': limit.strftime('%H:%M'),
+                                   'ends': {day: overrides[datetime.fromisoformat(day).date()][0][1].strftime('%H:%M')
+                                            for day in extended_days}},
                         'description': f"Work until {limit.strftime('%H:%M')} on {len(extended_days)} day(s) before the deadline",
                         'preview': _preview(blocks, titles, deadline)})
 
@@ -76,9 +108,12 @@ async def simulate_options(session, user_id, conflict: Conflict, *, now: datetim
     movable = [(block, source) for block, source in state.busy
                if source.get('type') == 'routine' and source.get('movable') and block.start < deadline and block.end > now]
     best = None
+    later = await busy_with_sources(session, user_id, deadline, deadline + timedelta(days=9), state.zone) if movable else []
     for block, source in sorted(movable, key=lambda item: -(item[0].end - item[0].start)):
         busy = [b for b, s in state.busy if not (s is source and b == block)]
-        moved_to = block.start + timedelta(days=((deadline - block.start).days + 1))
+        moved_to = free_destination(block, deadline, [b for b, _ in later] + busy)
+        if moved_to is None:
+            continue  # no free slot at the same time in the week after the deadline
         busy.append(BusyBlock(moved_to, moved_to + (block.end - block.start)))
         slots = calendar_slots(window_start=now, window_end=state.end, zone=state.zone, windows=state.windows,
                                busy=busy, overrides=state.overrides)
@@ -143,7 +178,8 @@ async def resolve(session, user_id, conflict: Conflict, option_type: str, *, now
         dates = dict(row.value.get('dates', {})) if row else {}
         today = now.date().isoformat()
         dates = {day: hours for day, hours in dates.items() if day >= today}
-        dates.update({day: {'start': start, 'end': change['end']} for day in change['dates']})
+        ends = change.get('ends', {})
+        dates.update({day: {'start': start, 'end': ends.get(day, change['end'])} for day in change['dates']})
         if row is None:
             row = Preference(user_id=user_id, key='work_hours_overrides', value={'dates': dates},
                              source='stated', confidence=1.0, status='active')

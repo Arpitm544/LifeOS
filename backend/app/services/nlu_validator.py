@@ -1,6 +1,7 @@
 """Schemas for every LLM tool call (PRD 4.2 / Appendix C) and deterministic checks."""
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from typing import Literal, Optional
 from uuid import UUID
@@ -179,16 +180,38 @@ def format_local(moment: datetime, timezone: str) -> str:
     return local.strftime('%a %d %b %H:%M')
 
 
+# Phrase shapes dateparser reads reliably ("in 5 minutes", "6 pm", "18:30").
+_RELIABLE_REMINDER = re.compile(r'\bin\s+(\d+|a|an|one|two|three|four|five|ten|fifteen|twenty|thirty)\s+(minute|min|hour|day)s?\b'
+                                r'|\b\d{1,2}(:\d{2})?\s*(am|pm)\b|\b\d{1,2}:\d{2}\b', re.IGNORECASE)
+
+
+def validate_deadline(iso: Optional[datetime], phrase: Optional[str], *, now: datetime, timezone: str) -> Optional[str]:
+    """PRD F1 step 3: the LLM must return both the ISO value and the user's words."""
+    if bool(phrase) != bool(iso):
+        return 'Please confirm both the deadline date and the words describing it.'
+    problem = check_phrase(iso, phrase, now=now, timezone=timezone)
+    if problem:
+        return problem
+    if iso and iso < now:
+        return "That deadline is in the past. What future date should I use?"
+    return None
+
+
+def validate_reminder(iso: Optional[datetime], phrase: Optional[str], *, now: datetime, timezone: str) -> Optional[str]:
+    """A reminder needs an exact time; the pair is cross-checked where parsing is reliable."""
+    if phrase and iso is None:
+        return 'When exactly should I remind you?'
+    if iso is None:
+        return None
+    if iso < now:
+        return "That reminder time has passed. When should I remind you?"
+    if phrase and _RELIABLE_REMINDER.search(phrase):
+        return check_phrase(iso, phrase, now=now, timezone=timezone)
+    return None  # e.g. "at 6": the reply and card show the exact time instead
+
+
 def validate_create_task(call: CreateTaskCall, *, now: datetime, timezone: str) -> Optional[str]:
     if call.confidence == "low" or call.missing_fields:
         return "Please clarify the missing task details."
-    if call.deadline_phrase and call.deadline_iso is None:
-        return 'Which date and time do you mean for the deadline?'
-    problem = check_phrase(call.deadline_iso, call.deadline_phrase, now=now, timezone=timezone)
-    if problem:
-        return problem
-    if call.deadline_iso and call.deadline_iso < now:
-        return "That deadline is in the past. What future date should I use?"
-    if call.remind_at_iso and call.remind_at_iso < now:
-        return "That reminder time has passed. When should I remind you?"
-    return None
+    return (validate_deadline(call.deadline_iso, call.deadline_phrase, now=now, timezone=timezone)
+            or validate_reminder(call.remind_at_iso, call.remind_at_phrase, now=now, timezone=timezone))

@@ -29,9 +29,9 @@ async def _titles(session, user_id) -> dict:
     return {str(identity): title for identity, title in rows}
 
 
-async def _owned(session, user_id, conflict_id: UUID) -> Conflict:
-    row = (await session.execute(select(Conflict).where(Conflict.id == conflict_id,
-        Conflict.user_id == user_id).with_for_update())).scalar_one_or_none()
+async def _owned(session, user_id, conflict_id: UUID, *, lock: bool = True) -> Conflict:
+    query = select(Conflict).where(Conflict.id == conflict_id, Conflict.user_id == user_id)
+    row = (await session.execute(query.with_for_update() if lock else query)).scalar_one_or_none()
     if row is None:
         raise HTTPException(status_code=404, detail="Conflict not found")
     return row
@@ -57,7 +57,7 @@ async def create_conflict(payload: ConflictCreate, session: AsyncSession = Depen
 async def conflict_options(conflict_id: UUID, session: AsyncSession = Depends(get_session),
                            user_id: UUID = Depends(current_user_id)) -> dict:
     """Simulated outcomes with timeline previews; nothing is written."""
-    row = await _owned(session, user_id, conflict_id)
+    row = await _owned(session, user_id, conflict_id, lock=False)
     return {"conflict": output(row, await _titles(session, user_id)),
             "options": await simulate_options(session, user_id, row)}
 

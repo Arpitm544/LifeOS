@@ -140,12 +140,18 @@ async def calibration_factors(session, user_id, values: dict | None = None) -> d
         values = await active_preferences(session, user_id)
     if not values.get('estimate_padding', {'enabled': True}).get('enabled', True):
         return {}
-    rows = (await session.execute(select(Task.category, Task.effort_est_min, Task.effort_actual_min)
-        .where(Task.user_id == user_id, Task.status == 'done', Task.effort_actual_min.is_not(None),
-               Task.effort_actual_min > 0, Task.effort_est_min > 0)
-        .order_by(Task.completed_at))).all()
-    if len(rows) < CALIBRATION_MIN_SAMPLES:
+    from sqlalchemy import func
+    sample = (Task.user_id == user_id, Task.status == 'done', Task.effort_actual_min.is_not(None),
+              Task.effort_actual_min > 0, Task.effort_est_min > 0)
+    total = (await session.execute(select(func.count()).select_from(Task).where(*sample))).scalar_one()
+    if total < CALIBRATION_MIN_SAMPLES:
         return {}
+    # Only the latest 20 completions per category leave the database.
+    ranked = select(Task.category, Task.effort_est_min, Task.effort_actual_min, Task.completed_at,
+        func.row_number().over(partition_by=Task.category, order_by=Task.completed_at.desc()).label('rank')
+    ).where(*sample).subquery()
+    rows = (await session.execute(select(ranked.c.category, ranked.c.effort_est_min, ranked.c.effort_actual_min)
+        .where(ranked.c.rank <= CALIBRATION_WINDOW).order_by(ranked.c.completed_at))).all()
     ratios: dict[str, list[float]] = defaultdict(list)
     for category, estimate, actual in rows:
         ratios[category].append(actual / estimate)
@@ -342,10 +348,13 @@ async def free_windows(session, user_id, *, task_id: UUID | None, now: datetime 
 
 
 async def next_free_slots(session, user_id, *, task_id: UUID | None, duration_min: int,
-                          now: datetime | None = None, count: int = 3, days: int = 7) -> list[dict]:
-    """Earliest free windows that fit `duration_min` (Reschedule, PRD F3)."""
+                          now: datetime | None = None, count: int = 3, days: int = 7,
+                          deadline: datetime | None = None) -> list[dict]:
+    """Earliest free windows that fit `duration_min` and end by `deadline` (Reschedule, PRD F3)."""
     output = []
     for slot in await free_windows(session, user_id, task_id=task_id, now=now, days=days):
+        if deadline is not None and slot.start + timedelta(minutes=duration_min) > _utc(deadline):
+            break
         if (slot.end - slot.start) >= timedelta(minutes=duration_min):
             output.append({'start_at': slot.start, 'end_at': slot.start + timedelta(minutes=duration_min)})
             if len(output) == count:

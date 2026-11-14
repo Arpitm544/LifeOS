@@ -8,6 +8,11 @@ alter table tasks add column priority_breakdown jsonb;
 alter table tasks add constraint tasks_breakdown_object check (
   priority_breakdown is null or jsonb_typeof(priority_breakdown) = 'object');
 
+-- 'sending' = claimed by a worker while the push is in flight (no row lock held
+-- during network calls); 'missed' was already allowed.
+alter table reminders drop constraint reminders_valid;
+alter table reminders add constraint reminders_valid check (
+ item_type in ('task','event') and status in ('pending','sending','sent','cancelled','acted','missed'));
 -- Reminder kinds written by the rules, plan blocks, user requests and the daily plan.
 alter table reminders add constraint reminders_kind_valid check (
   kind in ('start_now','due_soon','overdue','event','plan_block','custom','daily_plan'));
@@ -40,6 +45,26 @@ create table worker_status (
   last_jobs jsonb not null default '{}'
 );
 alter table worker_status enable row level security;
+-- Health check reads only the latest heartbeat time through this function.
+create function public.lifeos_worker_last_seen() returns timestamptz
+language sql stable security definer set search_path = pg_catalog as $$
+  select max(last_seen_at) from public.worker_status;
+$$;
+revoke all on function public.lifeos_worker_last_seen() from public;
+grant execute on function public.lifeos_worker_last_seen() to lifeos_api;
+
+-- One browser endpoint belongs to one user: subscribing from a shared browser
+-- removes the previous user's row so their reminders stop reaching this device.
+-- RLS hides other users' rows from lifeos_api, hence the definer function.
+create function public.claim_push_endpoint(p_endpoint text) returns void
+language sql security definer set search_path = pg_catalog as $$
+  delete from public.push_subscriptions
+  where endpoint = p_endpoint
+    and user_id <> nullif(current_setting('request.jwt.claim.sub', true), '')
+    and nullif(current_setting('request.jwt.claim.sub', true), '') is not null;
+$$;
+revoke all on function public.claim_push_endpoint(text) from public;
+grant execute on function public.claim_push_endpoint(text) to lifeos_api;
 
 -- Read paths used by analytics, Today and retention.
 create index if not exists tasks_owner_completed_idx on tasks(user_id, completed_at) where status = 'done';

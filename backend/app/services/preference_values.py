@@ -32,7 +32,8 @@ def validate_preference(key, value):
         if not isinstance(dates, dict) or len(dates) > 31:
             raise ValueError('Provide at most 31 dated overrides')
         for day, hours in dates.items():
-            date.fromisoformat(day)
+            if not isinstance(day, str) or len(day) != 10 or date.fromisoformat(day).isoformat() != day:
+                raise ValueError('Dates must use YYYY-MM-DD')
             validate_preference('work_hours', hours)
     elif key == 'demo_data':
         raise ValueError('Demo metadata is set only by the seed script')

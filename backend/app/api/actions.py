@@ -32,8 +32,15 @@ async def undo_batch(batch_id: UUID, session: AsyncSession = Depends(get_session
         raise HTTPException(status_code=404, detail='Batch not found')
     for row in rows:
         await undo_logged_action(session, user_id, row.id)
+    replanned = False
+    if any(row.entity == 'conflicts' for row in rows):
+        # Undoing a Capacity Guard fix restores its inputs; rebuild the plan and
+        # plan-block reminders it created so the schedule matches them again.
+        from ..services.planning_service import rebuild_plan
+        await rebuild_plan(session, user_id)
+        replanned = True
     await session.commit()
-    return {'undone': True, 'count': len(rows)}
+    return {'undone': True, 'count': len(rows), 'replanned': replanned}
 
 
 @router.post("/{action_id}/undo")

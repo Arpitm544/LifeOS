@@ -168,7 +168,9 @@ DERIVED_COLUMNS = {'priority_score', 'priority_band', 'priority_why', 'priority_
 
 
 def _comparable(values):
-    return {key: value for key, value in (values or {}).items() if key not in DERIVED_COLUMNS}
+    # Keys starting with "_" are action metadata (e.g. a custom reminder id), not columns.
+    return {key: value for key, value in (values or {}).items()
+            if key not in DERIVED_COLUMNS and not key.startswith('_')}
 
 
 async def undo_logged_action(session, owner, action_id):
@@ -241,6 +243,10 @@ async def undo_logged_action(session, owner, action_id):
             if value is not None and isinstance(column.type, DateTime):
                 value = datetime.fromisoformat(value)
             setattr(row, column.name, value)
+        if log.after.get('_custom_reminder_id'):
+            await session.execute(update(Reminder).where(Reminder.user_id == owner,
+                Reminder.id == UUID(log.after['_custom_reminder_id']), Reminder.status == 'pending')
+                .values(status='cancelled'))
     log.undone_at = datetime.now(timezone.utc)
     await session.flush()
     if model is Task:

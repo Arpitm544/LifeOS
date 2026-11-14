@@ -16,7 +16,7 @@
 | Chat pipeline | All nine PRD tools, context (preferences, top-30 open tasks with trigram matches first, today's events, last 6 messages, last touched item), validation, one clarification, confirmation for deletes and >3 writes, duplicate guard, custom reminders, message history | `POST /api/chat` response: `{message_id, reply, actions[], conflicts[], clarification: {question, options} or null, confirmation: {prompt, options} or null, fallback}`. Reply "yes"/"no" to a confirmation. |
 | Planning and Capacity Guard | Calibrated effort, priority `why` + breakdown, `POST /api/plan/rebuild`, Today with titles and free minutes, conflict detection after every change, option simulation with previews, resolve as one undoable batch, hypothetical capacity check | Working hours are planning supply; focus windows do not shrink it. Extended evenings are stored as `work_hours_overrides`. |
 | Reminders | Rule-based reminder templates, `reminder_lead` preference, custom and plan-block reminders, Done/Snooze/Reschedule, notification centre | Reschedule: action returns 3 slots, then `POST /api/reminders/{id}/reschedule {start_at}`. |
-| Worker and push | `python -m app.worker`: Web Push delivery with VAPID, per-user 10-minute merge, missed marking, hourly re-score, daily plan push, nightly retention, heartbeat (`GET /health/worker`) | Needs an administrative DB connection (`WORKER_DATABASE_URL`). |
+| Worker and push | `python -m app.worker`: reminders are claimed as `sending`, pushed with no row locks held, then marked `sent` (transient failures retry); per-user 10-minute merge serialized across workers; missed marking; per-job and per-user isolation for hourly re-score, once-a-day plan push and nightly retention; heartbeat (`GET /health/worker`) | Needs an administrative DB connection (`WORKER_DATABASE_URL`). Push endpoints are limited to `PUSH_ALLOWED_HOSTS`; one browser endpoint belongs to one user. |
 | Insights | DB-backed metrics and 14-day chart, grounded suggestions (numbers must exist in the stats), Apply/Dismiss | LLM wording is optional; template suggestions are used otherwise. |
 | Privacy | `GET /api/export`, `DELETE /api/account?confirmed=true` | Push keys are left out of exports. The Clerk account itself is deleted through Clerk. |
 | Voice | Removed | No `spoken_reply`, `source` or transcription endpoint. |
@@ -29,7 +29,7 @@ Run from `backend/`:
 .venv/bin/python -m pytest tests -q
 ```
 
-Current local result: **137 passed, 3 skipped** (SQLite). The skips need PostgreSQL: `test_postgres_repairs.py` (2 tests, passes against a disposable Postgres 16 with `REPAIR_TEST_DATABASE_URL`, including migration 007) and `test_postgres_security.py`.
+Current local result: **149 passed, 3 skipped** (SQLite). The skips need PostgreSQL: `test_postgres_repairs.py` (2 tests, passes against a disposable Postgres 16 with `REPAIR_TEST_DATABASE_URL`, including migration 007) and `test_postgres_security.py`.
 
 ## Required environment
 

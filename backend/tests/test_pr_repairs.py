@@ -127,9 +127,9 @@ async def _sqlite_session():
 
 async def _row_counts(session):
     from sqlalchemy import func, select
-    from app.models import ActionLog, Event, Preference, Task
+    from app.models import ActionLog, Conflict, Event, PlanBlock, Preference, Reminder, Task
     return [(await session.execute(select(func.count()).select_from(model))).scalar_one()
-            for model in (Task, Event, Preference, ActionLog)]
+            for model in (Task, Event, Preference, ActionLog, PlanBlock, Reminder, Conflict)]
 
 
 @pytest.mark.parametrize('reply', [LLMResponse('Hello', []),
@@ -142,7 +142,7 @@ def test_chat_no_action_or_invalid_tool_never_writes(reply):
         async with factory() as session:
             result = await handle_chat(session, user_id='user_a', text='Hello', client_tz='UTC', llm=llm)
             assert not result['fallback'] and result['actions'] == []
-            assert await _row_counts(session) == [0, 0, 0, 0]
+            assert await _row_counts(session) == [0] * 7
             if reply.tool_calls:
                 assert result['clarification']
         await engine.dispose()
@@ -157,7 +157,7 @@ def test_provider_outage_uses_fallback_and_past_date_clarifies(monkeypatch):
         async with factory() as session:
             result = await handle_chat(session, user_id='user_a', text='Report by yesterday', client_tz='UTC', llm=llm)
             assert result['fallback'] and result['clarification'] and not result['actions']
-            assert await _row_counts(session) == [0, 0, 0, 0]
+            assert await _row_counts(session) == [0] * 7
         await engine.dispose()
     asyncio.run(run())
 

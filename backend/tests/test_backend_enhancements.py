@@ -193,46 +193,174 @@ def test_snooze_is_logged_for_analytics():
     with_factory(body)
 
 
+def _push_settings():
+    return SimpleNamespace(vapid_private_key='k', vapid_subject='mailto:x@example.com',
+                           push_allowed_host_list=['fcm.googleapis.com'])
+
+
 def test_worker_delivers_once_merges_within_ten_minutes_and_marks_missed(monkeypatch):
     async def body(factory):
         from app import worker
+        from app.services.push_service import PushResult
         sent_payloads = []
 
         async def fake_send(subscriptions, payload, settings):
             sent_payloads.append(payload)
-            from app.services.push_service import PushResult
-            return PushResult(len(subscriptions), ['https://push.example/gone'])
+            return PushResult(len(subscriptions), ['https://fcm.googleapis.com/gone'])
         monkeypatch.setattr(worker, 'send_to_subscriptions', fake_send)
         now = datetime.now(timezone.utc)
-        settings = SimpleNamespace(vapid_private_key='k', vapid_subject='mailto:x@example.com')
         async with factory() as session:
             task = Task(user_id=OWNER, title='Report', created_at=now)
             session.add(task)
             await session.flush()
             session.add_all([
-                PushSubscription(user_id=OWNER, endpoint='https://push.example/gone', p256dh='a', auth='b'),
+                PushSubscription(user_id=OWNER, endpoint='https://fcm.googleapis.com/gone', p256dh='a', auth='b'),
                 Reminder(user_id=OWNER, item_type='task', item_id=task.id, kind='custom', fire_at=now - timedelta(seconds=5), message='one'),
                 Reminder(user_id=OWNER, item_type='task', item_id=task.id, kind='due_soon', fire_at=now - timedelta(seconds=1), message='two'),
                 Reminder(user_id=OWNER, item_type='task', item_id=task.id, kind='overdue', fire_at=now - timedelta(hours=3), message='old'),
             ])
             await session.commit()
-        async with factory() as session, session.begin():
-            report = await worker.deliver_due(session, settings, now=now)
-        assert report == {'sent': 2, 'deferred': 0, 'missed': 1}
+        report = await worker.deliver_due(factory, _push_settings(), now=now)
+        assert (report['sent'], report['deferred'], report['missed'], report['retry']) == (2, 0, 1, 0)
         assert len(sent_payloads) == 1 and sent_payloads[0]['body'].startswith('2 reminders')
         async with factory() as session:
             assert not (await session.execute(select(PushSubscription))).scalars().all()  # 410 Gone removed
+            statuses = sorted(r.status for r in (await session.execute(select(Reminder))).scalars())
+            assert statuses == ['missed', 'sent', 'sent']
             session.add(Reminder(user_id=OWNER, item_type='task', item_id=task.id, kind='custom',
                                  fire_at=now + timedelta(minutes=1), message='three'))
             await session.commit()
-        async with factory() as session, session.begin():
-            later = await worker.deliver_due(session, settings, now=now + timedelta(minutes=2))
+        later = await worker.deliver_due(factory, _push_settings(), now=now + timedelta(minutes=2))
         assert later['deferred'] == 1 and len(sent_payloads) == 1  # rate limit: wait, then summarize
         async with factory() as session, session.begin():
             await worker.heartbeat(session, 'w1', now=now, jobs={})
         async with factory() as session:
             assert (await session.get(WorkerStatus, 'w1')) is not None
     with_factory(body)
+
+
+def test_transient_push_failure_stays_retryable(monkeypatch):
+    async def body(factory):
+        from app import worker
+        from app.services.push_service import PushResult
+
+        async def failing(subscriptions, payload, settings):
+            return PushResult(0, [], failed=len(subscriptions), statuses=[503])
+        monkeypatch.setattr(worker, 'send_to_subscriptions', failing)
+        now = datetime.now(timezone.utc)
+        async with factory() as session:
+            task = Task(user_id=OWNER, title='Report', created_at=now)
+            session.add(task)
+            await session.flush()
+            session.add_all([PushSubscription(user_id=OWNER, endpoint='https://fcm.googleapis.com/a', p256dh='a', auth='b'),
+                             Reminder(user_id=OWNER, item_type='task', item_id=task.id, kind='custom', fire_at=now, message='x')])
+            await session.commit()
+        report = await worker.deliver_due(factory, _push_settings(), now=now)
+        assert report['retry'] == 1 and report['sent'] == 0
+        async with factory() as session:
+            reminder = (await session.execute(select(Reminder))).scalar_one()
+            assert reminder.status == 'pending' and reminder.sent_at is None
+    with_factory(body)
+
+
+def test_one_failing_job_does_not_stop_the_others(monkeypatch):
+    async def body(factory):
+        from app import worker
+        calls = []
+
+        async def broken(factory, *, now):
+            raise RuntimeError('boom')
+
+        async def fine(factory, *, now):
+            calls.append('retention')
+            return {}
+        monkeypatch.setitem(worker.JOBS, 'rescore', (timedelta(hours=1), broken))
+        monkeypatch.setitem(worker.JOBS, 'retention', (timedelta(hours=24), fine))
+        report = await worker.run_cycle(factory, _push_settings(), name='w', now=datetime.now(timezone.utc))
+        assert report['rescore'] == 'failed' and calls == ['retention']
+        async with factory() as session:
+            assert (await session.get(WorkerStatus, 'w')) is not None  # heartbeat still written
+    with_factory(body)
+
+
+def test_daily_plan_is_attempted_once_per_day():
+    async def body(factory):
+        from app import worker
+        now = datetime.now(timezone.utc).replace(hour=12)
+        async with factory() as session:
+            session.add(Task(user_id=OWNER, title='Someday', created_at=now))
+            await session.commit()
+        first = await worker.daily_plans(factory, now=now)
+        second = await worker.daily_plans(factory, now=now + timedelta(minutes=15))
+        async with factory() as session:
+            markers = (await session.execute(select(ActivityEvent).where(ActivityEvent.type == 'daily_plan_built'))).scalars().all()
+        assert first['failed'] == second['failed'] == 0 and len(markers) == 1
+    with_factory(body)
+
+
+def test_push_endpoints_are_limited_to_push_services():
+    from app.services.push_service import allowed_endpoint
+    hosts = ['fcm.googleapis.com', 'push.apple.com']
+    assert allowed_endpoint('https://fcm.googleapis.com/fcm/send/abc', hosts)
+    assert allowed_endpoint('https://web.push.apple.com/xyz', hosts)
+    assert not allowed_endpoint('https://169.254.169.254/latest/meta-data', hosts)
+    assert not allowed_endpoint('https://fcm.googleapis.com.evil.example/x', hosts)
+    assert not allowed_endpoint('http://fcm.googleapis.com/x', hosts)
+    assert not allowed_endpoint('https://fcm.googleapis.com:8443/x', hosts)
+
+
+def test_subscribe_upserts_and_moves_endpoint_to_current_user():
+    async def body(factory):
+        from app.api.push import SubscriptionIn, subscribe
+        endpoint = 'https://fcm.googleapis.com/fcm/send/device1'
+        async with factory() as session:
+            await subscribe(SubscriptionIn(endpoint=endpoint, keys={'p256dh': 'a', 'auth': 'b'}), session, 'user_first')
+            await subscribe(SubscriptionIn(endpoint=endpoint, keys={'p256dh': 'c', 'auth': 'd'}), session, 'user_second')
+            await subscribe(SubscriptionIn(endpoint=endpoint, keys={'p256dh': 'e', 'auth': 'f'}), session, 'user_second')
+            rows = (await session.execute(select(PushSubscription))).scalars().all()
+            assert [(r.user_id, r.p256dh) for r in rows] == [('user_second', 'e')]
+        with pytest.raises(Exception):
+            SubscriptionIn(endpoint='https://internal.example/hook', keys={'p256dh': 'a', 'auth': 'b'})
+    with_factory(body)
+
+
+def test_actual_effort_endpoint():
+    async def body(factory):
+        from fastapi import HTTPException
+        from app.api.tasks import ActualEffort, record_actual_effort
+        now = datetime.now(timezone.utc)
+        async with factory() as session:
+            open_task = Task(user_id=OWNER, title='Open', effort_est_min=60, created_at=now)
+            done_task = Task(user_id=OWNER, title='Done', effort_est_min=60, status='done', completed_at=now, created_at=now)
+            session.add_all([open_task, done_task])
+            await session.commit()
+            with pytest.raises(HTTPException) as error:
+                await record_actual_effort(open_task.id, ActualEffort(answer='more'), session, OWNER)
+            assert error.value.status_code == 409
+            with pytest.raises(HTTPException) as error:
+                await record_actual_effort(done_task.id, ActualEffort(answer='custom'), session, OWNER)
+            assert error.value.status_code == 422
+            for answer, expected in (('less', 45), ('about_right', 60), ('more', 90)):
+                result = await record_actual_effort(done_task.id, ActualEffort(answer=answer), session, OWNER)
+                assert result.effort_actual_min == expected
+            result = await record_actual_effort(done_task.id, ActualEffort(answer='custom', minutes=73), session, OWNER)
+            assert result.effort_actual_min == 73
+    with_factory(body)
+
+
+def test_extension_limit_respects_quiet_hours_and_routine_moves_avoid_bookings():
+    from datetime import time
+    from app.services.conflict_service import extension_limit, free_destination
+    from app.services.scheduler import BusyBlock
+    assert extension_limit(time(18), time(22, 30), time(7, 30)) == time(21)
+    assert extension_limit(time(18), time(19), time(23)) == time(19)
+    assert extension_limit(time(18), time(8), time(20)) == time(18)  # daytime quiet hours: no extension
+    deadline = datetime(2026, 11, 18, 9, tzinfo=timezone.utc)
+    gym = BusyBlock(datetime(2026, 11, 17, 7, tzinfo=timezone.utc), datetime(2026, 11, 17, 8, tzinfo=timezone.utc))
+    next_gym = BusyBlock(datetime(2026, 11, 18, 7, tzinfo=timezone.utc) + timedelta(days=1),
+                         datetime(2026, 11, 18, 8, tzinfo=timezone.utc) + timedelta(days=1))
+    moved = free_destination(gym, deadline, [next_gym])
+    assert moved is not None and moved > deadline and not (next_gym.start < moved + timedelta(hours=1) and moved < next_gym.end)
 
 
 def test_export_and_delete_account_remove_every_row():
@@ -243,14 +371,17 @@ def test_export_and_delete_account_remove_every_row():
             session.add(User(id=OWNER))
             session.add(Task(user_id=OWNER, title='Mine', created_at=now))
             session.add(Task(user_id='user_other', title='Theirs', created_at=now))
-            session.add(PushSubscription(user_id=OWNER, endpoint='https://push.example/1', p256dh='secret', auth='secret'))
+            session.add(PushSubscription(user_id=OWNER, endpoint='https://fcm.googleapis.com/1', p256dh='secret', auth='secret'))
             session.add(Message(user_id=OWNER, role='user', text='hello'))
             await session.commit()
             data = await export_data(session, OWNER)
             assert [t['title'] for t in data['tasks']] == ['Mine']
             assert 'p256dh' not in data['push_subscriptions'][0]
-            with pytest.raises(Exception):
+            assert 'auth' not in data['push_subscriptions'][0]
+            from fastapi import HTTPException
+            with pytest.raises(HTTPException) as error:
                 await delete_account(False, session, OWNER)
+            assert error.value.status_code == 409
             await delete_account(True, session, OWNER)
             assert [t.title for t in (await session.execute(select(Task))).scalars()] == ['Theirs']
             assert not (await session.execute(select(PushSubscription))).scalars().all()

@@ -9,7 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..auth import current_user_id
 from ..db import get_session
 from ..models import (ActionLog, ActivityEvent, Conflict, Event, IdempotencyRecord, Message, PlanBlock, Preference,
-                      PushSubscription, Reminder, Routine, Suggestion, Task, TaskDependency, User)
+                      PushSubscription, Reminder, Routine, Suggestion, Task, TaskDependency, User,
+                      WorkerHeartbeat)
 from ..services.domain_service import snapshot
 
 router = APIRouter(prefix="/api", tags=["account"])
@@ -19,7 +20,7 @@ OWNED = [('reminders', Reminder), ('plan_blocks', PlanBlock), ('task_dependencie
          ('conflicts', Conflict), ('suggestions', Suggestion), ('action_log', ActionLog),
          ('activity_events', ActivityEvent), ('messages', Message), ('idempotency_records', IdempotencyRecord),
          ('push_subscriptions', PushSubscription), ('preferences', Preference), ('routines', Routine),
-         ('events', Event), ('tasks', Task)]
+         ('worker_heartbeats', WorkerHeartbeat), ('events', Event), ('tasks', Task)]
 SECRET_COLUMNS = {'push_subscriptions': {'p256dh', 'auth'}, 'idempotency_records': {'response'}}
 
 

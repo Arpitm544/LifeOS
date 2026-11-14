@@ -52,7 +52,8 @@ app.include_router(conflicts_router)
 app.include_router(push_router)
 app.include_router(account_router)
 # Added last so it wraps everything: browser preflight requests are answered here,
-# before authentication and rate limiting, and error responses keep CORS headers.
+# before authentication and rate limiting, and handled error responses (401, 429,
+# HTTPException) keep CORS headers. An unhandled 500 does not.
 app.add_middleware(CORSMiddleware, allow_origins=get_settings().cors_origin_list,
                    allow_methods=['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
                    allow_headers=['Authorization', 'Content-Type', 'Idempotency-Key'],
@@ -69,8 +70,13 @@ async def worker_health() -> dict:
     from .db import SessionFactory
     from .models import WorkerStatus
     async with SessionFactory() as session:
-        last = (await session.execute(select(WorkerStatus.last_seen_at).order_by(
-            WorkerStatus.last_seen_at.desc()).limit(1))).scalar_one_or_none()
+        if session.get_bind().dialect.name == 'postgresql':
+            # worker_status is admin-only; the API role reads just the latest time.
+            await session.execute(text('SET LOCAL ROLE lifeos_api'))
+            last = (await session.execute(text('SELECT public.lifeos_worker_last_seen()'))).scalar_one_or_none()
+        else:
+            last = (await session.execute(select(WorkerStatus.last_seen_at).order_by(
+                WorkerStatus.last_seen_at.desc()).limit(1))).scalar_one_or_none()
     if last is None:
         return {"status": "missing", "last_seen_at": None}
     last = last if last.tzinfo else last.replace(tzinfo=timezone.utc)

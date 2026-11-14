@@ -2,7 +2,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 from typing import Optional
-from sqlalchemy import Boolean, DateTime, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Integer, String, Text, UniqueConstraint
 from sqlalchemy.types import TypeDecorator
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -171,6 +171,7 @@ class Message(Base):
 
 class PushSubscription(Base):
     __tablename__ = 'push_subscriptions'
+    __table_args__ = (UniqueConstraint('user_id', 'endpoint'),)
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id: Mapped[str] = mapped_column(ClerkUserId(), index=True)
     endpoint: Mapped[str] = mapped_column(Text)

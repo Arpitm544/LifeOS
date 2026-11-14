@@ -12,7 +12,7 @@ PRONOUNS = {'it', 'that', 'this', 'that one', 'this one', 'the last one'}
 
 
 def _words(text: str) -> list[str]:
-    return re.findall(r'[a-z0-9]+', text.lower())
+    return re.findall(r'[^\W_]+', text.lower())
 
 
 def trigrams(text: str) -> set[str]:

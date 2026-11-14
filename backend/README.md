@@ -53,12 +53,14 @@ Local PostgreSQL without TLS: set `DATABASE_SSL=false`. Hosted databases keep th
 
 Chat uses `ANTHROPIC_API_KEY` and `ANTHROPIC_MODEL` (default `claude-sonnet-5-5`); insight wording uses `ANTHROPIC_INSIGHT_MODEL` (default `claude-haiku-5-5`). No-action provider replies do not create tasks. Missing credentials, transport failures and malformed provider responses use quick-add; past deadlines ask for clarification.
 
-Apply migration 007 before starting this version. Run the worker as a second process:
+Apply migrations in numeric order: `006` must already be applied before `007` (see `migrations/README.md`). Run the worker as a second process:
 
 ```bash
 .venv/bin/python -m app.worker
 ```
 
-Web Push needs `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY`; without them reminders still appear in the notification centre and on Today.
+The worker reads due reminders for every user, so it needs an administrative database connection: set `WORKER_DATABASE_URL` (it falls back to `DATABASE_URL` for local development). Never run it on the tenant-scoped API login (`lifeos_api`); RLS would hide other users' reminders.
 
-Apply migration 006 before starting this version. Runtime rate limits use PostgreSQL transactions and a per-user/bucket advisory lock across all workers. Expired rows for inactive users are removed on subsequent API traffic by the bounded-permission cleanup function. Development tests may inject the in-memory limiter.
+Web Push needs `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY`; without them reminders still appear in the notification centre and on Today. Subscriptions are accepted only for the browser push services in `PUSH_ALLOWED_HOSTS`.
+
+Runtime rate limits use PostgreSQL transactions and a per-user/bucket advisory lock across all workers. Expired rows for inactive users are removed on subsequent API traffic by the bounded-permission cleanup function. Development tests may inject the in-memory limiter.

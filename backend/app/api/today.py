@@ -18,6 +18,38 @@ from zoneinfo import ZoneInfo
 router = APIRouter(prefix="/api/today", tags=["planning"])
 
 
+def _utc(value: datetime) -> datetime:
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+
+
+async def free_minutes_left(session, user_id, values, zone, *, now, start, end, planned) -> Optional[int]:
+    """Free working minutes left in the day, minus blocks of still-open tasks.
+
+    Only the calendar is needed, not the full planning state. Returns None when the
+    calendar cannot be expanded (e.g. an invalid recurring event) so Today still loads.
+    """
+    from fastapi import HTTPException
+    from ..services.planning_service import busy_with_sources, calendar_slots, day_overrides, planning_profile
+    window_start = max(now, start)
+    if end <= window_start:
+        return 0
+    _, windows = planning_profile(values)
+    try:
+        busy = [block for block, _ in await busy_with_sources(session, user_id, window_start, end, zone)]
+    except HTTPException:
+        return None
+    slots = calendar_slots(window_start=window_start, window_end=end, zone=zone, windows=windows,
+                           busy=busy, overrides=day_overrides(values))
+    total = 0.0
+    for slot in slots:
+        minutes = (slot.end - slot.start).total_seconds() / 60
+        for block in planned:
+            overlap = (min(slot.end, _utc(block.end_at)) - max(slot.start, _utc(block.start_at))).total_seconds() / 60
+            minutes -= max(0, overlap)
+        total += max(0, minutes)
+    return int(total)
+
+
 @router.get("")
 async def today(day: Optional[date] = Query(default=None), session: AsyncSession = Depends(get_session), user_id: UUID = Depends(current_user_id)) -> dict:
     values = await active_preferences(session, user_id)
@@ -32,24 +64,12 @@ async def today(day: Optional[date] = Query(default=None), session: AsyncSession
     conflicts = (await session.execute(select(Conflict).where(Conflict.user_id == user_id,
         Conflict.status == 'open').order_by(Conflict.deadline_at))).scalars().all()
     now = datetime.now(timezone.utc)
-    titles = dict((await session.execute(select(Task.id, Task.title).where(Task.user_id == user_id,
-        Task.id.in_([block.task_id for block in blocks] or [None])))).all())
-    from ..services.planning_service import load_state
-    free_min = 0
-    if end > now:
-        state = await load_state(session, user_id, now=max(now, start), days=1)
-        planned_busy = [(b.start_at if b.start_at.tzinfo else b.start_at.replace(tzinfo=timezone.utc),
-                         b.end_at if b.end_at.tzinfo else b.end_at.replace(tzinfo=timezone.utc))
-                        for b in blocks if b.status == 'planned']
-        for slot in state.slots:
-            s_start, s_end = max(slot.start, now, start), min(slot.end, end)
-            if s_end <= s_start:
-                continue
-            minutes = (s_end - s_start).total_seconds() / 60
-            for b_start, b_end in planned_busy:
-                overlap = (min(s_end, b_end) - max(s_start, b_start)).total_seconds() / 60
-                minutes -= max(0, overlap)
-            free_min += max(0, int(minutes))
+    rows = (await session.execute(select(Task.id, Task.title, Task.status).where(Task.user_id == user_id,
+        Task.id.in_([block.task_id for block in blocks] or [None])))).all()
+    titles = {row.id: row.title for row in rows}
+    active = {row.id for row in rows if row.status in ('open', 'blocked')}
+    free_min = await free_minutes_left(session, user_id, values, zone, now=now, start=start, end=end,
+        planned=[block for block in blocks if block.status == 'planned' and block.task_id in active])
     next_block = next((block for block in blocks if block.status == 'planned' and
                        block.end_at.replace(tzinfo=timezone.utc) > now), None)
     return {

@@ -5,6 +5,8 @@ from typing import Optional
 
 from pydantic import AwareDatetime, BaseModel, Field
 
+from .schemas import Category
+
 
 class CapacityTaskInput(BaseModel):
     id: str
@@ -20,7 +22,7 @@ class HypotheticalTask(BaseModel):
     title: str = Field(default='New work', min_length=1, max_length=120)
     effort_min: int = Field(ge=5, le=1440)
     deadline: AwareDatetime
-    category: str = Field(default='other', pattern='^(study|work|errand|health|social|finance|home|other)$')
+    category: Category = Category.other
 
 
 class CapacityCheckRequest(BaseModel):
