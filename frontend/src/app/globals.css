@@ -211,7 +211,7 @@ main { max-width: 1100px; }
 .mic-button.listening { color: white; background: var(--color-action); animation: mic-pulse 1.4s ease-out infinite; }
 @keyframes mic-pulse { 0%,100% { box-shadow: 0 0 0 0 #345cf433; } 50% { box-shadow: 0 0 0 7px #345cf400; } }
 .composer-note { color: var(--color-muted); font-size: 9px; display: block; margin-top: 10px; }
-.composer-note.error-message { color: #96382c; }
+.composer-note.error-message { color: #96382c; font-size: 12px; }
 .voice-reply { display: inline-flex; align-items: center; gap: 7px; }
 .chat-main > audio { display: none; }
 .voice-panel { padding-top: 20px; overflow: hidden; min-height: 390px; }
@@ -345,7 +345,7 @@ button.priority:hover { text-decoration: underline; }
 .suggestion-item { display: grid; gap: 12px; padding-bottom: 14px; border-bottom: 1px solid #ffffff22; }
 .suggestion-item > p { color: #d9e3dd; font-size: 13px; }
 .text-button.light { color: #d9e3dd; }
-.text-button.light:hover { color: var(--color-lime); }
+.text-button.light:hover { color: var(--color-accent); }
 .known-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
 .known-list li { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--color-line); }
 .known-list li:last-child { border-bottom: 0; padding-bottom: 0; }

@@ -6,7 +6,7 @@ export function resolveTheme(saved: string | null, systemDark: boolean): Theme {
 }
 
 // Runs before the page paints so a saved dark theme does not flash light.
-export const themeInitScript = `(function(){var saved=null;try{saved=localStorage.getItem("lifeos.theme")}catch{}document.documentElement.dataset.theme=saved==="light"||saved==="dark"?saved:window.matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light"})()`;
+export const themeInitScript = `(function(){var saved=null;try{saved=localStorage.getItem(${JSON.stringify(themeStorageKey)})}catch{}document.documentElement.dataset.theme=saved==="light"||saved==="dark"?saved:window.matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light"})()`;
 
 let sessionTheme: Theme | null = null;
 const themeEvent = "lifeos-theme-change";

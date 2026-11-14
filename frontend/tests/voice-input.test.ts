@@ -80,3 +80,35 @@ test("canceling pending microphone permission releases late streams without reco
   assert.equal(env.render().listening, false);
   env.cleanup();
 });
+
+test("deterministic transcript failures discard audio and cannot retry", async () => {
+  for (const [response, prefix] of [
+    [Response.json({ error: "No audio" }, { status: 400 }), ""],
+    [Response.json({ error: "No speech" }, { status: 422 }), ""],
+    [Response.json({ text: "" }), ""],
+    [Response.json({ text: "hello" }), "x".repeat(1000)],
+  ] as const) {
+    let uploads = 0;
+    const env = setup(async () => { uploads++; return response; });
+    await env.render().toggle(prefix); await env.render().toggle(); await settle();
+    assert.equal(env.render().canRetry, false);
+    assert.ok(env.render().error);
+    env.render().retry(); await settle();
+    assert.equal(uploads, 1);
+    assert.equal(env.transcript(), "");
+    env.cleanup();
+  }
+});
+
+test("network and server failures retain audio for retry", async () => {
+  for (const fetcher of [
+    async () => { throw new TypeError("Network error"); },
+    async () => { throw new DOMException("Timed out", "TimeoutError"); },
+    async () => new Response("unavailable", { status: 502 }),
+  ]) {
+    const env = setup(fetcher);
+    await env.render().toggle(); await env.render().toggle(); await settle();
+    assert.equal(env.render().canRetry, true);
+    env.cleanup();
+  }
+});

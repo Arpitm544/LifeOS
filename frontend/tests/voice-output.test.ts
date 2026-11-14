@@ -25,7 +25,7 @@ test("spoken audio exposes a playable URL and stop/unmount pause playback and re
   assert.equal(env.render().url, "blob:reply");
   assert.equal(env.render().loading, false);
   env.render().setPlaying(true);
-  await env.render().read("hello");
+  env.render().stop();
   assert.equal(env.render().url, "");
   assert.deepEqual(env.revoked, ["blob:reply"]);
   await env.render().read("hello"); env.cleanup();
@@ -51,5 +51,25 @@ test("speech provider errors leave no playable audio and clear loading", async (
   assert.deepEqual(env.errors, ["Add DEEPGRAM_API_KEY"]);
   assert.equal(env.render().url, "");
   assert.equal(env.render().loading, false);
+  env.cleanup();
+});
+
+test("non-JSON speech failures show the fallback instead of a parser error", async () => {
+  const env = setup(async () => new Response("unavailable", { status: 502 }));
+  await env.render().read("hello");
+  assert.deepEqual(env.errors, ["Could not generate speech. Please retry."]);
+  env.cleanup();
+});
+
+test("reading another reply replaces playback and cancels pending audio", async () => {
+  let finish!: (response: Response) => void;
+  let calls = 0;
+  const env = setup(async () => ++calls === 1 ? new Promise<Response>(resolve => { finish = resolve; }) : new Response("second", { headers: { "Content-Type": "audio/mpeg" } }));
+  const first = env.render().read("first");
+  await env.render().read("second");
+  finish(new Response("old", { headers: { "Content-Type": "audio/mpeg" } })); await first;
+  assert.equal(env.render().url, "blob:reply");
+  assert.equal(env.render().loading, false);
+  assert.deepEqual(env.errors, []);
   env.cleanup();
 });

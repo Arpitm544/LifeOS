@@ -12,7 +12,7 @@ export function ThemeToggle() {
     const next = theme === "dark" ? "light" : "dark";
     setTheme(next);
   }
-  return <button type="button" className="theme-toggle" onClick={toggle} aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`} aria-pressed={theme === "dark"} title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}>
-    {theme === "dark" ? <Sun size={18} aria-hidden="true" /> : <Moon size={18} aria-hidden="true" />}<span className="sr-only">Switch to {theme === "dark" ? "light" : "dark"} mode</span>
+  return <button type="button" className="theme-toggle" onClick={toggle} aria-label="Dark mode" aria-pressed={theme === "dark"} title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}>
+    {theme === "dark" ? <Sun size={18} aria-hidden="true" /> : <Moon size={18} aria-hidden="true" />}<span className="sr-only">Dark mode</span>
   </button>;
 }

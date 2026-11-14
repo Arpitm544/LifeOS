@@ -14,7 +14,7 @@ export function AuthShell({ children }: { children: ReactNode }) {
     <section className="auth-panel" aria-label="Account access">
       <div className="auth-panel-top"><Link className="auth-mobile-brand" href="/"><span className="landing-logo" aria-hidden="true" /> LifeOS</Link><ThemeToggle /></div>
       <div className="auth-form-content"><p className="auth-form-kicker">A LITTLE CLARITY STARTS HERE</p>{children}</div>
-      <footer className="auth-form-footer"><span>By continuing, you agree to LifeOS’s account terms.</span><Link href="/">Back to LifeOS home</Link></footer>
+      <footer className="auth-form-footer"><Link href="/">Back to LifeOS home</Link></footer>
     </section>
   </main>;
 }

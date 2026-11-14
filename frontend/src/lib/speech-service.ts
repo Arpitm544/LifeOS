@@ -16,8 +16,14 @@ export async function speechResponse(request: Request, apiKey: string | undefine
       method: "POST", headers: { Authorization: `Token ${apiKey}`, "Content-Type": "application/json" }, body: JSON.stringify({ text }),
       signal: AbortSignal.any([request.signal, AbortSignal.timeout(25_000)]),
     });
-    if (!response.ok) return error(response.status === 429 ? "Voice service is busy. Please retry shortly." : "Could not generate speech. Please retry.", response.status === 429 ? 429 : 502);
-    if (!response.body || !response.headers.get("content-type")?.startsWith("audio/")) return error("Voice service returned invalid audio. Please retry.", 502);
+    if (!response.ok) {
+      await response.body?.cancel();
+      return error(response.status === 429 ? "Voice service is busy. Please retry shortly." : "Could not generate speech. Please retry.", response.status === 429 ? 429 : 502);
+    }
+    if (!response.body || !response.headers.get("content-type")?.startsWith("audio/")) {
+      await response.body?.cancel();
+      return error("Voice service returned invalid audio. Please retry.", 502);
+    }
     return new Response(response.body, { headers: { ...headers, "Content-Type": "audio/mpeg" } });
   } catch { return error("Speech generation did not finish. Please retry.", 502); }
 }

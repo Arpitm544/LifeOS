@@ -10,7 +10,7 @@ test("theme resolution and early script prefer saved choices and handle unavaila
     for (const saved of [null, "invalid", ""]) assert.equal(resolveTheme(saved, systemDark), systemDark ? "dark" : "light");
     for (const saved of [null, "light", "dark", "invalid"]) {
       const document = { documentElement: { dataset: { theme: "" } } };
-      vm.runInNewContext(themeInitScript, { document, localStorage: { getItem: () => saved }, window: { matchMedia: () => ({ matches: systemDark }) } });
+      vm.runInNewContext(themeInitScript, { document, localStorage: { getItem: (key: string) => { assert.equal(key, themeStorageKey); return saved; } }, window: { matchMedia: () => ({ matches: systemDark }) } });
       assert.equal(document.documentElement.dataset.theme, resolveTheme(saved, systemDark));
     }
     const document = { documentElement: { dataset: { theme: "" } } };
@@ -58,7 +58,14 @@ test("theme changes persist, sync across controls and tabs, and fall back to ses
     dispose();
     const last = changes;
     setTheme("light");
-    assert.equal(changes, last, "unmount removes listeners");
+    assert.equal(changes, last, "unmount removes theme callback");
+    blocked = false;
+    saved.set(themeStorageKey, "dark");
+    media.matches = true;
+    host.dispatchEvent(Object.assign(new Event("storage"), { key: themeStorageKey, newValue: "dark" }));
+    assert.equal(getTheme(), "light", "unmount removes storage listener");
+    media.dispatchEvent(new Event("change"));
+    assert.equal(getTheme(), "light", "unmount removes system listener");
   } finally {
     dispose();
     for (const [key, descriptor] of originals) {

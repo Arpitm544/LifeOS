@@ -51,20 +51,23 @@ export function useVoiceInput(onTranscript: (text: string) => void) {
     const saved = recording.current;
     if (!saved) return;
     setProcessing(true); setCanRetry(false); setError("");
+    let retryable = true;
     try {
       const response = await fetch("/api/transcribe", {
         method: "POST", headers: { "Content-Type": saved.audio.type }, body: saved.audio,
         signal: AbortSignal.any([controller.signal, AbortSignal.timeout(30_000)]),
       });
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.error || "Could not transcribe. Please retry.");
+      retryable = response.status === 429 || response.status >= 500;
+      const result = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(typeof result?.error === "string" ? result.error : "Could not transcribe. Please retry.");
+      retryable = false;
       if (controller.signal.aborted) return;
-      if (typeof result.text !== "string" || !result.text.trim()) throw new Error("No speech detected. Please record again.");
+      if (typeof result?.text !== "string" || !result.text.trim()) throw new Error("No speech detected. Please record again.");
       const text = [saved.prefix.trim(), result.text.trim()].filter(Boolean).join(" ");
       if (text.length > 1000) throw new Error("Your draft plus recording exceeds 1,000 characters. Shorten the draft or record a shorter message.");
       callback.current(text); recording.current = null;
     } catch (e) {
-      if (!controller.signal.aborted) { setError(e instanceof Error ? e.message : "Transcription failed. Please retry."); setCanRetry(true); }
+      if (!controller.signal.aborted) { setError(e instanceof Error ? e.message : "Transcription failed. Please retry."); setCanRetry(retryable); if (!retryable) recording.current = null; }
     } finally {
       if (operation.current === controller) { operation.current = null; setProcessing(false); }
     }

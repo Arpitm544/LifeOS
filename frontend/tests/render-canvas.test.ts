@@ -3,7 +3,15 @@ import test from "node:test";
 import { renderCanvas } from "../src/lib/render-canvas.ts";
 
 test("canvas respects reduced motion, scales to its surface, and releases listeners and frames", () => {
-  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+  const originals = ["window", "ResizeObserver", "localStorage"].map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)] as const);
+  let observed: unknown, disconnected = false, clears = 0, reduced = false;
+  let onResize!: () => void;
+  Object.defineProperty(globalThis, "ResizeObserver", { configurable: true, value: class {
+    constructor(callback: () => void) { onResize = callback; }
+    observe(surface: unknown) { observed = surface; }
+    disconnect() { disconnected = true; }
+  } });
+  Object.defineProperty(globalThis, "localStorage", { configurable: true, value: { getItem: () => reduced ? "true" : null } });
   const frames = new Map<number, FrameRequestCallback>();
   let nextFrame = 0;
   let strokes = 0;
@@ -21,11 +29,16 @@ test("canvas respects reduced motion, scales to its surface, and releases listen
       getBoundingClientRect: () => ({ left: 10, top: 20 }),
     });
     const canvas = { parentElement: surface, width: 0, height: 0, getContext: () => ({
-      clearRect() {}, setTransform() {}, beginPath() {}, moveTo() {}, lineTo() {}, stroke() { strokes++; },
+      clearRect() { clears++; }, setTransform() {}, beginPath() {}, moveTo() {}, lineTo() {}, stroke() { strokes++; },
     }) };
     const dispose = renderCanvas(canvas as unknown as HTMLCanvasElement);
     assert.equal(canvas.width, 1000, "pixel ratio is capped at two");
     assert.equal(canvas.height, 600);
+    assert.equal(observed, surface);
+    surface.clientHeight = 400; surface.clientWidth = 600;
+    onResize();
+    assert.equal(canvas.height, 800, "content changes resize the backing store");
+    assert.equal(canvas.width, 1200);
     const move = () => surface.dispatchEvent(Object.assign(new Event("pointermove"), { clientX: 100, clientY: 80, pointerType: "mouse" }));
     move();
     assert.equal(frames.size, 0, "reduced motion schedules no work");
@@ -49,11 +62,26 @@ test("canvas respects reduced motion, scales to its surface, and releases listen
     move();
     dispose?.();
     assert.equal(frames.size, 0, "unmount cancels animation");
+    const lastClears = clears;
     move();
+    surface.dispatchEvent(new Event("pointerleave"));
+    motion.dispatchEvent(new Event("change"));
+    surface.clientHeight = 500;
+    host.dispatchEvent(new Event("resize"));
+    assert.equal(canvas.height, 800);
+    assert.equal(clears, lastClears, "unmount removes leave and media listeners");
+    assert.equal(disconnected, true, "unmount disconnects surface observation");
     assert.equal(frames.size, 0, "unmount removes pointer listener");
+    reduced = true;
+    const disposeReduced = renderCanvas(canvas as unknown as HTMLCanvasElement);
+    move();
+    assert.equal(frames.size, 0, "Profile reduced motion disables pointer trails");
+    disposeReduced?.();
   } finally {
-    if (previousWindow) Object.defineProperty(globalThis, "window", previousWindow);
-    else Reflect.deleteProperty(globalThis, "window");
+    for (const [key, descriptor] of originals) {
+      if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+      else Reflect.deleteProperty(globalThis, key);
+    }
   }
 });
 

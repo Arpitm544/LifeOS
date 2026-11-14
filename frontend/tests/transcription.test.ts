@@ -44,3 +44,12 @@ test("silence, long transcripts and provider failures return safe actionable err
     assert.doesNotMatch(await response.text(), /secret/);
   }
 });
+
+test("inherited format names are rejected before forwarding audio", async () => {
+  for (const type of ["constructor", "__proto__", "toString"]) {
+    let forwarded = false;
+    const response = await transcriptionResponse(request("audio", type), "key", "model", async () => { forwarded = true; return provider("hello"); });
+    assert.equal(response.status, 415);
+    assert.equal(forwarded, false);
+  }
+});

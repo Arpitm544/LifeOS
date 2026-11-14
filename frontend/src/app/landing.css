@@ -95,8 +95,7 @@
 }
 
 html[data-theme="dark"] .preview-briefing .landing-kicker,
-html[data-theme="dark"] .preview-chat-messages strong,
-html[data-theme="dark"] .preview-task > span { color: var(--color-blue); }
+html[data-theme="dark"] .preview-chat-messages strong { color: var(--color-blue); }
 html[data-theme="dark"] .preview-nav .preview-active { color: white; }
 html[data-theme="dark"] .cinematic-footer { background: #0b1020; }
 @media (max-width: 700px) { .landing-status { grid-template-columns: 1fr; gap: 22px; margin: 0 16px 40px; padding: 24px 18px; }.landing-status h2 { font-size: 29px; }.landing-status-grid article { padding: 14px; }.landing-status-grid small { font-size: 7px; }.landing-status-grid p { font-size: 10px; }.landing-status .landing-status-cta { grid-column: 1; margin-top: -4px; } }

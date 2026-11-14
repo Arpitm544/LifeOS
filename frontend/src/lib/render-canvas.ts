@@ -5,6 +5,8 @@ export function renderCanvas(canvas: HTMLCanvasElement) {
   if (!context || !surface) return;
 
   const motion = window.matchMedia("(prefers-reduced-motion: no-preference) and (pointer: fine)");
+  let reducedMotion = false;
+  try { reducedMotion = localStorage.getItem("lifeos.reduced-motion") === "true"; } catch { /* Use the system preference when storage is unavailable. */ }
   let points: { x: number; y: number; time: number }[] = [];
   let frame = 0;
   let width = 0;
@@ -41,7 +43,7 @@ export function renderCanvas(canvas: HTMLCanvasElement) {
     if (points.length) frame = window.requestAnimationFrame(draw);
   };
   const move = (event: PointerEvent) => {
-    if (!motion.matches || event.pointerType === "touch") return;
+    if (reducedMotion || !motion.matches || event.pointerType === "touch") return;
     const rect = surface.getBoundingClientRect();
     points.push({ x: event.clientX - rect.left, y: event.clientY - rect.top, time: performance.now() });
     points = points.slice(-40);
@@ -52,12 +54,13 @@ export function renderCanvas(canvas: HTMLCanvasElement) {
   surface.addEventListener("pointermove", move);
   surface.addEventListener("pointerleave", clear);
   motion.addEventListener("change", clear);
-  window.addEventListener("resize", resize);
+  const observer = new ResizeObserver(resize);
+  observer.observe(surface);
   return () => {
     clear();
     surface.removeEventListener("pointermove", move);
     surface.removeEventListener("pointerleave", clear);
     motion.removeEventListener("change", clear);
-    window.removeEventListener("resize", resize);
+    observer.disconnect();
   };
 }

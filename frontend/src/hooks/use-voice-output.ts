@@ -22,7 +22,6 @@ export function useVoiceOutput(onError: (message: string) => void) {
   useEffect(() => () => release(), []);
 
   async function read(text: string) {
-    if (pending.current || playing) { stop(); return; }
     stop();
     const controller = new AbortController(); pending.current = controller;
     setLoading(true);
@@ -32,8 +31,8 @@ export function useVoiceOutput(onError: (message: string) => void) {
         signal: AbortSignal.any([controller.signal, AbortSignal.timeout(30_000)]),
       });
       if (!response.ok) {
-        const result = await response.json();
-        throw new Error(result.error || "Could not generate speech. Please retry.");
+        const result = await response.json().catch(() => null);
+        throw new Error(typeof result?.error === "string" ? result.error : "Could not generate speech. Please retry.");
       }
       if (!response.headers.get("content-type")?.startsWith("audio/")) throw new Error("Could not load spoken reply. Please retry.");
       const audio = await response.blob();

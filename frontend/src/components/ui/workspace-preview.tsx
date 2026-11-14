@@ -12,16 +12,16 @@ export function WorkspacePreview() {
   const [prompt, setPrompt] = useState("");
   const toggleTask = (index: number) => setCompleted(current => current.includes(index) ? current.filter(id => id !== index) : [...current, index]);
 
-  return <div id="workspace-preview" className="workspace-preview" aria-label="Interactive sample LifeOS workspace">
+  return <div id="workspace-preview" className="workspace-preview" role="region" aria-label="Interactive sample LifeOS workspace">
     <div className="preview-toolbar"><span className="preview-window-dots" aria-hidden="true"><i /><i /><i /></span><span>YOUR PERSONAL ORBIT</span><span className="preview-demo">INTERACTIVE PREVIEW · SAMPLE DATA</span></div>
     <div className="preview-content">
       <aside className="preview-sidebar"><span className="brand"><span className="landing-logo" aria-hidden="true" /> LifeOS</span><div className="preview-nav" role="group" aria-label="Choose a workspace preview">{views.map(item => <button type="button" key={item} className={view === item ? "preview-active" : ""} aria-pressed={view === item} onClick={() => setView(item)}>{item}<ArrowUpRight size={13} /></button>)}</div><span className="preview-sidebar-bottom">Sample workspace · Not your saved data</span></aside>
-      <div key={view} className="preview-main" aria-label={`${view} preview`}>
+      <div key={view} className="preview-main" role="region" aria-label={`${view} preview`}>
         <p className="landing-kicker">{view === "Today" ? "TODAY" : view === "Tasks" ? "YOUR TASKS" : "CHAT PREVIEW"}</p>
         <h2>{view === "Today" ? "Your day at a glance." : view === "Tasks" ? "Your tasks, in one place." : "Capture a thought."}</h2>
         <p className="preview-description">Sample content only. Nothing here changes your workspace.</p>
         {view === "Today" ? <>
-          <div className="preview-summary" aria-label="Sample day summary">
+          <div className="preview-summary">
             <div><span>Open tasks</span><strong>{sampleTasks.length - completed.length}</strong></div>
             <div><span>Completed</span><strong>{completed.length}</strong></div>
             <div><span>Focus window</span><strong>2 hours</strong></div>

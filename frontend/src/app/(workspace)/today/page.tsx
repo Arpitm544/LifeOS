@@ -60,7 +60,7 @@ export default function TodayPage() {
   const summary = today ? `${due.length ? `${due.length} task${due.length === 1 ? "" : "s"} due` : "Nothing due"} today. You have ${formatHours(today.free_min_left)} of open time left.` : "";
 
   return <>
-    <PageHeading eyebrow="Today · Your workspace" title={`Good to see you, ${name.first}.`} description="Your tasks, schedule and available time in one place." />
+    <PageHeading eyebrow="Today · Your workspace" title="Your day at a glance." description="Your tasks, schedule and available time in one place." />
     {today?.conflicts.length ? <div className="conflict-banner" role="alert">{today.conflicts.map(c => <button key={c.id} onClick={() => setConflict(c)}><span><b>{formatHours(c.shortfall_min)} short</b> before {formatDeadline(c.deadline_at, tz)}. Needs {formatHours(c.needed_min)}, {formatHours(c.free_min)} free.</span><span className="banner-cta">See options →</span></button>)}</div> : null}
     <section className="hero panel pale" aria-labelledby="briefing-title"><div className="hero-copy"><p className="eyebrow blue">Your day, in orbit</p><h2 id="briefing-title">Hello, {name.first}.</h2>
       <p>{today ? summary : error ? "Your day could not be loaded." : "Loading your day…"}{today?.next ? <><br />Next up: {today.next.title ?? "Task"} at {formatClock(today.next.start_at, tz)}.</> : null}</p>
