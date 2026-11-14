@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { filterTasks, formatEffort, localDateKey, parseWorkspace, validatePreferences, validateTask } from "../src/lib/task-utils.ts";
+import { compareDeadlines, filterTasks, formatEffort, localDateKey, parseWorkspace, validatePreferences, validateTask } from "../src/lib/task-utils.ts";
 import type { Preferences, Task } from "../src/lib/types.ts";
 
 const task: Task = { id: "1", title: "Study", deadline: "2026-11-14T19:00:00Z", effort: 30, importance: 3, category: "study", completed: false };
@@ -41,4 +41,29 @@ test("preferences allow overnight quiet hours and validate working and focus tim
   assert.ok(validatePreferences({ ...preferences, focusEnd: "20:00" }));
   assert.ok(validatePreferences({ ...preferences, quietStart: "27:00" }));
   assert.equal(formatEffort(90), "1h 30m");
+});
+
+test("deadline validation rejects normalized calendar dates and accepts leap days and offsets", () => {
+  for (const deadline of ["2026-02-31", "2026-02-29T12:00:00Z", "2026-04-31T23:00:00-05:00", "2026-00-01", "2026-13-01", "2026-01-00", "11/14/2026"]) {
+    assert.ok(validateTask({ ...task, deadline }), deadline);
+    assert.throws(() => parseWorkspace(JSON.stringify({ version: 1, tasks: [{ ...task, deadline }], preferences })));
+  }
+  for (const deadline of [null, "2024-02-29", "2024-02-29T23:00:00-05:00", "2026-11-14T19:00:00.000Z"]) assert.equal(validateTask({ ...task, deadline }), null);
+});
+
+test("Today includes overdue incomplete tasks without leaking into Upcoming", () => {
+  const now = new Date("2026-11-16T12:00:00Z");
+  const tasks = [task, { ...task, id: "done", completed: true }, { ...task, id: "undated", deadline: null }];
+  assert.deepEqual(filterTasks(tasks, "today", "", "UTC", now), [task]);
+  assert.deepEqual(filterTasks(tasks, "upcoming", "", "UTC", now), []);
+});
+
+test("deadline order uses instants, keeps undated tasks last and does not change the source", () => {
+  const early = { ...task, id: "early", deadline: "2026-11-15T01:00:00+08:00" };
+  const undated = { ...task, id: "undated", deadline: null };
+  const tasks = [undated, task, early];
+  assert.deepEqual([...tasks].sort(compareDeadlines).map(t => t.id), ["early", "1", "undated"]);
+  assert.deepEqual(tasks.map(t => t.id), ["undated", "1", "early"]);
+  assert.equal(compareDeadlines(undated, undated), 0);
+  assert.equal(compareDeadlines(task, { ...task }), 0);
 });

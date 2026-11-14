@@ -18,28 +18,47 @@ const Context = createContext<Workspace | null>(null);
 
 export function WorkspaceProvider({ children, userId }: { children: ReactNode; userId: string }) {
   const key = workspaceStorageKey(userId);
-  const [tasks, setTasks] = useState<Task[]>(demoTasks);
+  const [tasks, setTasks] = useState<Task[]>([]);
   const [preferences, setPreferences] = useState(defaultPreferences);
   const [ready, setReady] = useState(false);
   const [notice, notify] = useState("");
   const canPersist = useRef(true);
+  const lastSaved = useRef<string | null>(null);
 
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem(key);
-      if (raw) { const saved = parseWorkspace(raw); setTasks(saved.tasks); setPreferences(saved.preferences); }
-    } catch {
-      canPersist.current = false;
-      notify("Saved data could not be loaded. Demo data is shown; the original data has not been overwritten.");
+    function load() {
+      try {
+        const raw = localStorage.getItem(key);
+        const saved = raw ? parseWorkspace(raw) : { tasks: demoTasks, preferences: defaultPreferences };
+        lastSaved.current = raw;
+        canPersist.current = true;
+        setTasks(saved.tasks); setPreferences(saved.preferences);
+      } catch {
+        canPersist.current = false;
+        notify("Saved data could not be loaded. This session starts empty; the original data has not been overwritten.");
+      }
     }
+    load();
     setReady(true);
+    function sync(event: StorageEvent) {
+      if (event.storageArea === localStorage && (event.key === key || event.key === null)) load();
+    }
+    window.addEventListener("storage", sync);
+    return () => window.removeEventListener("storage", sync);
   }, [key]);
 
   useEffect(() => {
     if (!ready || !canPersist.current) return;
-    try { localStorage.setItem(key, JSON.stringify({ version: 1, tasks, preferences })); }
+    const raw = JSON.stringify({ version: 1, tasks, preferences });
+    if (raw === lastSaved.current) return;
+    try { localStorage.setItem(key, raw); lastSaved.current = raw; }
     catch { notify("Browser storage is unavailable. Keep this tab open; changes will not survive a reload."); }
   }, [tasks, preferences, ready, key]);
+
+  useEffect(() => {
+    document.documentElement.dataset.reducedMotion = String(preferences.reducedMotion);
+    return () => { delete document.documentElement.dataset.reducedMotion; };
+  }, [preferences.reducedMotion]);
 
   function saveTask(input: TaskInput, id?: string) {
     const error = validateTask(input);
@@ -59,7 +78,7 @@ export function WorkspaceProvider({ children, userId }: { children: ReactNode; u
   return <Context.Provider value={{ tasks, preferences, ready, notice, notify, saveTask, savePreferences,
     toggleTask: id => setTasks(current => current.map(t => t.id === id ? { ...t, completed: !t.completed } : t)),
     deleteTask: id => { setTasks(current => current.filter(t => t.id !== id)); notify("Task removed from this device."); },
-  }}><div data-reduced-motion={preferences.reducedMotion}>{children}</div></Context.Provider>;
+  }}><div data-reduced-motion={preferences.reducedMotion}>{ready ? children : <p role="status">Opening your workspace…</p>}</div></Context.Provider>;
 }
 
 export function useWorkspace() {
