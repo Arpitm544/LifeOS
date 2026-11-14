@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { speechResponse } from "../src/lib/speech-service.ts";
+import { parseVoices, speechResponse } from "../src/lib/speech-service.ts";
 
 const request = (value: unknown = { text: "Hello" }) => new Request("http://localhost/api/speak", { method: "POST", body: JSON.stringify(value) });
 
@@ -42,4 +42,23 @@ test("speech cancels rejected provider bodies", async () => {
     assert.equal(response.status, status === 429 ? 429 : 502);
     assert.equal(canceled, true);
   }
+});
+
+test("other languages use their configured voice, or ask the browser to speak", async () => {
+  let sentUrl = "";
+  const fetcher = async (url: string | URL | Request) => { sentUrl = String(url); return new Response("mp3", { headers: { "Content-Type": "audio/mpeg" } }); };
+  const voices = "es:aura-2-celeste-es, bad entry, fr:aura-2-agathe-fr";
+  assert.equal((await speechResponse(request({ text: "Hola", language: "es-ES" }), "key", "aura-2-thalia-en", fetcher, voices)).status, 200);
+  assert.equal(sentUrl, "https://api.deepgram.com/v1/speak?model=aura-2-celeste-es&encoding=mp3");
+  assert.equal((await speechResponse(request({ text: "Hi", language: "en-GB" }), "key", "aura-2-thalia-en", fetcher, voices)).status, 200);
+  assert.match(sentUrl, /model=aura-2-thalia-en/);
+  const hindi = await speechResponse(request({ text: "नमस्ते", language: "hi-IN" }), "key", "aura-2-thalia-en", fetcher, voices);
+  assert.equal(hindi.status, 422);
+  assert.equal((await hindi.json()).code, "unsupported_language");
+  assert.equal((await speechResponse(request({ text: "x", language: "hi; drop" }), "key", "m", fetcher)).status, 400);
+});
+
+test("voice config parsing ignores malformed entries", () => {
+  assert.deepEqual({ ...parseVoices("es:aura-2-celeste-es,:x,fr:,de:bad voice,toString:y") }, { es: "aura-2-celeste-es" });
+  assert.deepEqual({ ...parseVoices(undefined) }, {});
 });

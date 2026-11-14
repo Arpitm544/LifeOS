@@ -53,3 +53,12 @@ test("inherited format names are rejected before forwarding audio", async () => 
     assert.equal(forwarded, false);
   }
 });
+
+test("the language Deepgram heard is returned with the transcript", async () => {
+  const heard = (alternative: Record<string, unknown>, extra: Record<string, unknown> = {}) => async () =>
+    Response.json({ results: { channels: [{ alternatives: [{ transcript: "kal report", ...alternative }], ...extra }] } });
+  assert.equal((await (await transcriptionResponse(request(), "key", "m", heard({ languages: ["hi", "en"] }))).json()).language, "hi");
+  assert.equal((await (await transcriptionResponse(request(), "key", "m", heard({}, { detected_language: "es" }))).json()).language, "es");
+  assert.equal((await (await transcriptionResponse(request(), "key", "m", heard({}))).json()).language, null);
+  assert.equal((await (await transcriptionResponse(request(), "key", "m", heard({ languages: ["<script>"] }))).json()).language, null);
+});

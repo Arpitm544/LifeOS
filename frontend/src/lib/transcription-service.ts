@@ -32,12 +32,16 @@ export async function transcriptionResponse(request: Request, apiKey: string | u
       return error(response.status === 429 ? "Voice service is busy. Please retry shortly." : "Could not transcribe the recording. Please retry.", response.status === 429 ? 429 : 502);
     }
     const result = await response.json();
-    const transcript = result.results?.channels?.[0]?.alternatives?.[0]?.transcript;
+    const channel = result.results?.channels?.[0];
+    const transcript = channel?.alternatives?.[0]?.transcript;
     if (typeof transcript !== "string") return error("The voice service returned an invalid transcript. Please retry.", 502);
     const text = transcript.trim();
     if (!text) return error("No speech detected. Please try again.", 422);
     if (text.length > 1000) return error("That transcript exceeds 1,000 characters. Please record a shorter message.", 422);
-    return Response.json({ text }, { headers });
+    // Multilingual models list the languages heard, most used first; detect_language sets detected_language.
+    const heard = channel?.alternatives?.[0]?.languages?.[0] ?? channel?.detected_language;
+    const language = typeof heard === "string" && /^[a-z]{2,3}(-[A-Za-z0-9]{2,8})?$/i.test(heard) ? heard.toLowerCase() : null;
+    return Response.json({ text, language }, { headers });
   } catch {
     return error("Transcription did not finish. Please retry or type your message.", 502);
   } finally { reader.releaseLock(); }

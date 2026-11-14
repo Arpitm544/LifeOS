@@ -106,7 +106,7 @@ async def build_context(session, user_id, text: str, client_tz: str, now: dateti
     return ChatContext(now, zone, tz_name, summary, tasks, history, last_touched, pending)
 
 
-def llm_context(ctx: ChatContext, text: str, events: list[Event]) -> dict:
+def llm_context(ctx: ChatContext, text: str, events: list[Event], language: Optional[str] = None) -> dict:
     # Trigram matches for words in the message go first so "the report" resolves.
     matches = [identity for identity, _, score in rank(text, [(str(t.id), t.title) for t in ctx.open_tasks])[:5] if score >= 0.3]
     by_id = {str(task.id): task for task in ctx.open_tasks}
@@ -115,6 +115,7 @@ def llm_context(ctx: ChatContext, text: str, events: list[Event]) -> dict:
     return {
         'now_local': local_now.strftime('%A %Y-%m-%d %H:%M (UTC%z)'),
         'timezone': ctx.timezone_name,
+        'reply_language': language,
         'preferences': ctx.preferences,
         'last_touched_item_id': str(ctx.last_touched) if ctx.last_touched else None,
         'open_tasks': [{'id': str(task.id), 'title': task.title,
@@ -127,7 +128,8 @@ def llm_context(ctx: ChatContext, text: str, events: list[Event]) -> dict:
 
 
 async def handle_chat(session, *, user_id, text: str, client_tz: str,
-                      llm: Optional[LLMClient] = None, now: Optional[datetime] = None) -> dict:
+                      llm: Optional[LLMClient] = None, now: Optional[datetime] = None,
+                      language: Optional[str] = None) -> dict:
     started = time.monotonic()
     now = _utc(now or datetime.now(timezone.utc))
     ctx = await build_context(session, user_id, text, client_tz, now)
@@ -150,7 +152,7 @@ async def handle_chat(session, *, user_id, text: str, client_tz: str,
                 Event.cancelled == False, Event.start_at < day_start + timedelta(days=1),
                 Event.end_at > day_start).order_by(Event.start_at))).scalars())
             try:
-                response = await client.parse(text=text, context=llm_context(ctx, text, events), history=ctx.history)
+                response = await client.parse(text=text, context=llm_context(ctx, text, events, language), history=ctx.history)
             except (LLMUnavailable, httpx.HTTPError, TimeoutError, OSError, ValueError, KeyError, TypeError):
                 fallback = True
         if fallback:
