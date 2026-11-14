@@ -716,3 +716,5 @@ html[data-theme="dark"] .nudge.risk .nudge-icon { background: #3b2630; color: #f
 .agent-step-time { font-size: 11px; color: var(--color-muted); font-variant-numeric: tabular-nums; }
 html[data-theme="dark"] .agent-step.asked .agent-step-icon, html[data-theme="dark"] .agent-step.waiting .agent-step-icon { background: #3a3020; color: #f3cf86; }
 html[data-theme="dark"] .agent-step.warning .agent-step-icon, html[data-theme="dark"] .agent-step.failed .agent-step-icon { background: #3b2630; color: #ffb9aa; }
+.photo-preview { max-width: min(100%, 360px); max-height: 260px; border-radius: 12px; object-fit: contain; border: 1px solid var(--color-line); background: var(--color-paper); }
+.drop-zone .button.secondary { display: inline-flex; gap: 8px; align-items: center; }

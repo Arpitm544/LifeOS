@@ -81,7 +81,8 @@ class FallbackLLMClient:
     async def write(self, *, system: str, payload: dict) -> str:
         raise LLMUnavailable('No language model configured')
 
-    async def call_tool(self, *, system: str, text: str, tool: dict, max_tokens: int = 4096) -> dict:
+    async def call_tool(self, *, system: str, text: str, tool: dict, max_tokens: int = 4096,
+                        images: list[tuple[str, str]] | None = None) -> dict:
         raise LLMUnavailable('No language model configured')
 
 
@@ -171,10 +172,18 @@ class AnthropicLLMClient:
         return LLMResponse(reply, calls, int(usage.get('input_tokens', 0)), int(usage.get('output_tokens', 0)),
                            int((time.monotonic() - started) * 1000), self.model)
 
-    async def call_tool(self, *, system: str, text: str, tool: dict, max_tokens: int = 4096) -> dict:
-        """Force one call of `tool` ({name, description, input_schema}) and return its arguments."""
+    async def call_tool(self, *, system: str, text: str, tool: dict, max_tokens: int = 4096,
+                        images: list[tuple[str, str]] | None = None) -> dict:
+        """Force one call of `tool` ({name, description, input_schema}) and return its arguments.
+
+        `images` are (media type, base64 data) pairs sent before the text, for vision models.
+        """
+        content: list[dict] | str = '<user_data>\n' + text + '\n</user_data>'
+        if images:
+            content = [*({'type': 'image', 'source': {'type': 'base64', 'media_type': media, 'data': data}}
+                         for media, data in images), {'type': 'text', 'text': content}]
         body = {'model': self.model, 'max_tokens': max_tokens, 'temperature': 0, 'system': system,
-                'messages': [{'role': 'user', 'content': '<user_data>\n' + text + '\n</user_data>'}],
+                'messages': [{'role': 'user', 'content': content}],
                 'tools': [tool], 'tool_choice': {'type': 'tool', 'name': tool['name']}}
         data = await self._post(body)
         for item in data.get('content') or []:
@@ -246,13 +255,27 @@ class OpenAICompatibleLLMClient(AnthropicLLMClient):
             int(usage.get('prompt_tokens', 0)), int(usage.get('completion_tokens', 0)),
             int((time.monotonic() - started) * 1000), self.model)
 
-    async def call_tool(self, *, system: str, text: str, tool: dict, max_tokens: int = 4096) -> dict:
-        data = await self._post({'model': self.model, 'temperature': 0, 'max_tokens': max_tokens,
+    async def call_tool(self, *, system: str, text: str, tool: dict, max_tokens: int = 4096,
+                        images: list[tuple[str, str]] | None = None) -> dict:
+        content: list[dict] | str = '<user_data>\n' + text + '\n</user_data>'
+        if images:
+            content = [*({'type': 'image_url', 'image_url': {'url': f'data:{media};base64,{data}'}} for media, data in images),
+                       {'type': 'text', 'text': content}]
+        body = {'model': self.model, 'temperature': 0, 'max_tokens': max_tokens,
             'messages': [{'role': 'system', 'content': system},
-                {'role': 'user', 'content': '<user_data>\n' + text + '\n</user_data>'}],
+                {'role': 'user', 'content': content}],
             'tools': [{'type': 'function', 'function': {'name': tool['name'],
                 'description': tool.get('description', ''), 'parameters': tool['input_schema']}}],
-            'tool_choice': {'type': 'function', 'function': {'name': tool['name']}}})
+            'tool_choice': {'type': 'function', 'function': {'name': tool['name']}}}
+        import httpx
+        try:
+            data = await self._post(body)
+        except httpx.HTTPStatusError as exc:
+            # Some endpoints (Gemini's OpenAI layer) reject a forced tool choice with a bare 400.
+            # The prompt already says to always call the tool, so retry once letting the model choose.
+            if exc.response is None or exc.response.status_code != 400:
+                raise
+            data = await self._post({**body, 'tool_choice': 'auto'})
         for item in self._message(data).get('tool_calls') or []:
             function = item.get('function') or {}
             if function.get('name') == tool['name']:
@@ -277,7 +300,8 @@ OPENAI_COMPATIBLE_PROVIDERS = {
     'groq': ('https://api.groq.com/openai/v1/chat/completions', 'openai/gpt-oss-20b'),
     'xai': ('https://api.x.ai/v1/chat/completions', 'grok-4'),
     'openai': ('https://api.openai.com/v1/chat/completions', 'gpt-4o-mini'),
-    'gemini': ('https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', 'gemini-2.5-flash'),
+    # gemini-2.5-flash is closed to new users (404); override with GEMINI_MODEL as Google retires models.
+    'gemini': ('https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', 'gemini-3.5-flash'),
     'openrouter': ('https://openrouter.ai/api/v1/chat/completions', 'openai/gpt-4o-mini'),
 }
 PROVIDER_ALIASES = {'grok': 'xai', 'google': 'gemini', 'claude': 'anthropic'}
@@ -335,3 +359,40 @@ def configured_llm():
         if client is not None:
             return client
     return FallbackLLMClient()
+
+
+# Vision defaults for providers whose chat endpoint accepts images. Others need VISION_MODEL.
+VISION_DEFAULTS = {
+    # Groq currently serves no vision model; set VISION_PROVIDER=groq and VISION_MODEL to use one if it adds one.
+    'openai': 'gpt-4o-mini',
+    'gemini': 'gemini-3.5-flash',
+    'openrouter': 'openai/gpt-4o-mini',
+    'anthropic': 'claude-sonnet-5-5',
+}
+
+
+def configured_vision_llm():
+    """A client that can read images, or None when no configured provider can.
+
+    VISION_PROVIDER forces a provider and VISION_MODEL a model; otherwise the first provider with a key
+    and a known vision model wins, in AUTO_ORDER (xai and custom endpoints need VISION_MODEL).
+    """
+    from ..config import get_settings
+    settings = get_settings()
+    forced = _setting(settings, 'vision_provider').lower()
+    forced = PROVIDER_ALIASES.get(forced, forced)
+    model = _setting(settings, 'vision_model')
+    if forced and forced not in AUTO_ORDER:
+        raise ValueError(f'Unknown VISION_PROVIDER {forced!r}; use one of: {", ".join(AUTO_ORDER)}')
+    timeout = max(getattr(settings, 'llm_timeout_seconds', 8.0), getattr(settings, 'import_timeout_seconds', 45.0))
+    for provider in ([forced] if forced else AUTO_ORDER):
+        vision_model = model or VISION_DEFAULTS.get(provider)
+        if not vision_model or not _provider_key(settings, provider):
+            continue
+        client = _build_provider(settings, provider)
+        if client is None:
+            continue
+        client.model = client.insight_model = vision_model
+        client.timeout_seconds = timeout
+        return client
+    return None

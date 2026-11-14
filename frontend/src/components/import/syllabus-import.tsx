@@ -1,12 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { FileUp } from "lucide-react";
+import { Camera, FileUp } from "lucide-react";
 import { useEffect, useRef, useState, type ChangeEvent, type DragEvent } from "react";
 import { useWorkspace } from "@/components/providers/workspace-provider";
 import { readableError } from "@/lib/api";
 import { bytesToBase64, extractNotes, MAX_TEXT_CHARS, saveSummary, selectedTasks, toReviewRows, UNDO_SECONDS, uploadKind, type ExtractResult, type ReviewRow, type SaveResult } from "@/lib/syllabus";
 import { formatDeadline } from "@/lib/task-utils";
+import { preparePhoto } from "@/lib/photo";
+import { categories, type Category } from "@/lib/types";
 
 type Stage = { name: "input" } | { name: "review"; result: ExtractResult } | { name: "saved"; result: SaveResult; savedAt: number };
 
@@ -21,13 +23,15 @@ export function SyllabusImport() {
   const { api, preferences, reloadTasks } = useWorkspace();
   const [stage, setStage] = useState<Stage>({ name: "input" });
   const [text, setText] = useState("");
-  const [file, setFile] = useState<{ name: string; pdf?: string } | null>(null);
+  const [file, setFile] = useState<{ name: string; pdf?: string; image?: string; preview?: string } | null>(null);
+  const [preparing, setPreparing] = useState(false);
   const [rows, setRows] = useState<ReviewRow[]>([]);
   const [plan, setPlan] = useState(true);
   const [busy, setBusy] = useState<"" | "reading" | "saving" | "undoing">("");
   const [error, setError] = useState("");
   const [undoLeft, setUndoLeft] = useState(0);
   const fileInput = useRef<HTMLInputElement>(null);
+  const cameraInput = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (stage.name !== "saved") return;
@@ -42,6 +46,15 @@ export function SyllabusImport() {
     if (!chosen) return;
     const kind = uploadKind(chosen);
     if ("error" in kind) { setError(kind.error); return; }
+    if (kind.kind === "image") {
+      setPreparing(true);
+      try {
+        const photo = await preparePhoto(chosen);
+        setFile({ name: chosen.name || "Photo", image: photo.base64, preview: photo.dataUrl });
+      } catch (e) { setError(readableError(e, "That photo could not be opened. Try again or paste the text.")); }
+      finally { setPreparing(false); }
+      return;
+    }
     try {
       if (kind.kind === "pdf") setFile({ name: chosen.name, pdf: bytesToBase64(new Uint8Array(await chosen.arrayBuffer())) });
       else { setText((await chosen.text()).slice(0, MAX_TEXT_CHARS)); setFile(null); }
@@ -51,7 +64,7 @@ export function SyllabusImport() {
   async function extract() {
     setError(""); setBusy("reading");
     try {
-      const body = file?.pdf ? { pdf_base64: file.pdf, client_tz: preferences.timezone } : { text, client_tz: preferences.timezone };
+      const body = file?.image ? { image_base64: file.image, client_tz: preferences.timezone } : file?.pdf ? { pdf_base64: file.pdf, client_tz: preferences.timezone } : { text, client_tz: preferences.timezone };
       const result = await api<ExtractResult>("/api/import/syllabus/extract", { method: "POST", body });
       setRows(toReviewRows(result.proposals));
       setStage({ name: "review", result });
@@ -109,7 +122,7 @@ export function SyllabusImport() {
     const { result } = stage;
     const count = rows.filter(row => row.selected).length;
     return <section className="panel import-panel" aria-label="Review tasks from your syllabus">
-      <div className="import-head"><div><p className="eyebrow blue">{result.course || "Your syllabus"}</p><h2>{rows.length ? `Found ${rows.length} thing${rows.length === 1 ? "" : "s"} to plan for.` : "Nothing to add."}</h2><p className="muted">Nothing is saved yet. Untick what you don’t need and fix anything that looks off.</p></div></div>
+      <div className="import-head"><div><p className="eyebrow blue">{result.course || (result.source === "photo" ? "Your photo" : "Your syllabus")}</p><h2>{rows.length ? `Found ${rows.length} thing${rows.length === 1 ? "" : "s"} to plan for.` : "Nothing to add."}</h2><p className="muted">Nothing is saved yet. Untick what you don’t need and fix anything that looks off.</p></div></div>
       {extractNotes(result).map(note => <p key={note} className="muted import-note">{note}</p>)}
       {rows.length ? <ul className="import-list">{rows.map(row => <li key={row.id} className={row.selected ? "" : "unselected"}>
         <input type="checkbox" checked={row.selected} onChange={e => update(row.id, { selected: e.target.checked })} aria-label={`Add ${row.title || "this task"}`} />
@@ -119,12 +132,13 @@ export function SyllabusImport() {
             <span className="chip">{row.kind}</span>
             <label>Due<input type="datetime-local" value={localInput(row.deadline_at)} onChange={e => update(row.id, { deadline_at: e.target.value ? new Date(e.target.value).toISOString() : null })} /></label>
             <label>Effort (min)<input type="number" min={5} max={600} value={row.effort_est_min} onChange={e => update(row.id, { effort_est_min: Number(e.target.value) })} /></label>
+            <label>Category<select value={row.category} onChange={e => update(row.id, { category: e.target.value as Category })}>{categories.map(c => <option key={c} value={c}>{c[0].toUpperCase() + c.slice(1)}</option>)}</select></label>
             <label>Importance<select value={row.importance} onChange={e => update(row.id, { importance: Number(e.target.value) })}>{[1, 2, 3, 4, 5].map(n => <option key={n} value={n}>{n}</option>)}</select></label>
           </div>
           {row.notes ? <small className="muted import-source">{row.notes}</small> : null}
           {row.deadline_at ? <small className="muted">{formatDeadline(row.deadline_at, preferences.timezone)}</small> : <small className="muted">No date found — it will be added without a deadline.</small>}
         </div>
-      </li>)}</ul> : <p className="muted">No dated deadlines were found. Try pasting the schedule section of the syllabus.</p>}
+      </li>)}</ul> : <p className="muted">{result.source === "photo" ? "No tasks could be read from that photo. Try a closer, well-lit photo, or paste the text." : "No dated deadlines were found. Try pasting the schedule section of the syllabus."}</p>}
       {errorBox}
       <div className="import-actions">
         <label className="import-plan"><input type="checkbox" checked={plan} onChange={e => setPlan(e.target.checked)} /> Plan focus time for these over the next two weeks</label>
@@ -136,17 +150,20 @@ export function SyllabusImport() {
     </section>;
   }
 
-  const ready = !!file?.pdf || !!text.trim();
+  const ready = !preparing && (!!file?.pdf || !!file?.image || !!text.trim());
+  const reading = file?.image ? "Reading your photo…" : "Reading your syllabus…";
   return <section className="panel import-panel">
-    <h2>Drop in a syllabus.</h2>
-    <p className="muted">LifeOS finds the exams, assignments and deadlines, then plans time for them. You review everything before it’s saved.</p>
+    <h2>Drop in a syllabus, a list or a photo.</h2>
+    <p className="muted">LifeOS finds the deadlines and to-dos in a syllabus, a PDF or a photo of a whiteboard or handwritten list, then plans time for them. You review everything before it’s saved.</p>
     <div className={`drop-zone${file ? " has-file" : ""}`} onDragOver={(e: DragEvent) => e.preventDefault()} onDrop={(e: DragEvent) => { e.preventDefault(); void choose(e.dataTransfer.files[0]); }}>
-      <FileUp size={22} aria-hidden="true" />
-      {file ? <p><b>{file.name}</b> is ready. <button className="text-button" onClick={() => setFile(null)}>Remove</button></p> : <p>Drag a PDF or text file here, or <button className="text-button" onClick={() => fileInput.current?.click()}>choose a file</button>.</p>}
-      <input ref={fileInput} type="file" accept=".pdf,.txt,.md,application/pdf,text/plain" hidden onChange={(e: ChangeEvent<HTMLInputElement>) => { void choose(e.target.files?.[0]); e.target.value = ""; }} />
+      {file?.preview ? <img className="photo-preview" src={file.preview} alt="The photo LifeOS will read" /> : <FileUp size={22} aria-hidden="true" />}
+      {preparing ? <p role="status">Preparing your photo…</p> : file ? <p><b>{file.name}</b> is ready. <button className="text-button" onClick={() => setFile(null)}>Remove</button></p> : <p>Drag a photo, PDF or text file here, or <button className="text-button" onClick={() => fileInput.current?.click()}>choose a file</button>.</p>}
+      {!file && !preparing ? <button type="button" className="button secondary" onClick={() => cameraInput.current?.click()}><Camera size={16} aria-hidden="true" /> Take a photo</button> : null}
+      <input ref={fileInput} type="file" accept=".pdf,.txt,.md,application/pdf,text/plain,image/jpeg,image/png,image/webp,image/heic,image/heif" hidden onChange={(e: ChangeEvent<HTMLInputElement>) => { void choose(e.target.files?.[0]); e.target.value = ""; }} />
+      <input ref={cameraInput} type="file" accept="image/*" capture="environment" hidden onChange={(e: ChangeEvent<HTMLInputElement>) => { void choose(e.target.files?.[0]); e.target.value = ""; }} />
     </div>
     {!file ? <label className="import-text">Or paste it here<textarea value={text} onChange={e => setText(e.target.value.slice(0, MAX_TEXT_CHARS))} rows={9} placeholder={"CS101 — Fall term\nAssignment 1 due Nov 20\nMidterm exam: Dec 3 at 10:00\nFinal project due Dec 12"} /></label> : null}
     {errorBox}
-    <div className="button-row"><button className="button" onClick={extract} disabled={!ready || !!busy}>{busy === "reading" ? "Reading your syllabus…" : "Find my deadlines"} <span aria-hidden="true">→</span></button></div>
+    <div className="button-row"><button className="button" onClick={extract} disabled={!ready || !!busy}>{busy === "reading" ? reading : file?.image ? "Find the tasks" : "Find my deadlines"} <span aria-hidden="true">→</span></button></div>
   </section>;
 }

@@ -89,7 +89,7 @@ def _settings(**values):
 @pytest.mark.parametrize('values,provider,url_part,model', [
     ({'xai_api_key': 'k'}, 'XAI', 'api.x.ai', 'grok-4'),
     ({'openai_api_key': 'k', 'openai_model': 'gpt-x'}, 'Openai', 'api.openai.com', 'gpt-x'),
-    ({'gemini_api_key': 'k'}, 'Gemini', 'generativelanguage.googleapis.com', 'gemini-2.5-flash'),
+    ({'gemini_api_key': 'k'}, 'Gemini', 'generativelanguage.googleapis.com', 'gemini-3.5-flash'),
     ({'openrouter_api_key': 'k'}, 'Openrouter', 'openrouter.ai', 'openai/gpt-4o-mini'),
     ({'llm_api_key': 'k', 'llm_base_url': 'http://localhost:11434/v1', 'llm_model': 'llama3'}, 'Custom',
      'localhost:11434/v1/chat/completions', 'llama3'),
