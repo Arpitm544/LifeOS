@@ -1,0 +1,52 @@
+# LifeOS backend delivery plan — eight steps
+
+Reference: `docs/PRD.md` from `Arpitm544/LifeOS`, branch **Backend**, inspected 2026-11-14. GitHub contains the root README and PRD; backend implementation remains local. The local folder is not a Git checkout. No remote changes have been made.
+
+This replaces the previous fourteen-step breakdown with exactly eight delivery steps. Scope and acceptance requirements are retained. Step 1 is complete; Steps 2 and 3 are implemented locally with PostgreSQL acceptance pending; Steps 4–8 remain pending. A step is complete only after its implementation and applicable acceptance gates pass; route existence alone is insufficient.
+
+| Step | Status | Scope | Acceptance gate | Suggested commit boundary |
+| --- | --- | --- | --- | --- |
+| **1. Validation and regression baseline** | Complete locally | Reject naive task deadlines; validate routine times/RRULE, chat timezone and paired/parseable deadline inputs; prevent omitted capacity supply from silently skipping tasks. | Four reproduced defects now pass; valid/invalid rules, timezone and one-hour date-parse boundaries tested. **49 passed, zero expected failures**; dependency checks and startup/OpenAPI pass. | `fix(backend): validate deadlines recurrence and capacity inputs` |
+| **2. Database integrity and authentication** | Implemented locally; PostgreSQL acceptance pending | Additive migrations for constraints, ownership-safe foreign keys, dependencies, messages, push subscriptions and worker heartbeat. Restricted database role and Clerk transaction context for effective RLS. Verify Clerk RS256 JWT issuer/expiry/optional audience and authorized parties through its pinned JWKS. Migration 005 converts earlier UUID/Supabase Auth tenant identity columns to Clerk text subjects. | Fresh migration and upgrade from applied 001 tested on PostgreSQL; two-user RLS/ownership isolation; correct grants; unsupported/expired tokens rejected; no secrets staged. | `feat(db): enforce Clerk tenant isolation and authentication` |
+| **3. Complete data lifecycle, preferences and Undo** | Implemented locally; PostgreSQL acceptance pending | Task/event PATCH and filters; dependencies with cycle detection, blocked/unblocked status and pinning. Typed preference keys/values/source/status, preference PATCH/delete, inferred-setting acceptance. Routines and bounded recurrence expansion/instance edits. Transactional before/after audit and state comparison for mutations, 10-second Undo, atomic batch grouping, delete and bulk confirmations. Preference edits rebuild generated task/event reminders in the same transaction; custom/plan reminders remain Step 6. | CRUD and cross-user reference tests; cycles rejected; completion unblocks dependents; recurrence/DST checks; atomic rollback, expiry, repeated Undo, modified-after-action and batch restore tested. Preferences demonstrably feed planning/reminders. Execute the PostgreSQL locking/RLS gates before declaring the step complete. | `feat(domain): complete CRUD preferences and transactional undo` |
+| **4. Priority, scheduler, Today and Capacity Guard** | In progress | Replace hardcoded free time with calendar working minutes and remaining calibrated effort; configurable priority weights, dependency counts, overdue/pinned ordering and score explanations. Load tasks/events/routines/preferences; local daily/7-day windows, focus preference, overdue policy and chunk balancing. Persist/replan atomically; serialize placements per user; correct Today local-day/now/next behavior. Compute capacity from stored calendar, detect/persist on change, simulate up to three feasible options, apply selected plan with Undo, and provide extension-message drafts. | Initial database-backed planning is implemented and tested: timezone/work/focus windows, events/routines, dependency impact, persisted blocks/conflicts, and local-day Today boundaries. Remaining acceptance work: preview/apply+Undo contract, configurable weights, concurrency, benchmark/property fixtures and live PostgreSQL validation. | `feat(planning): integrate priorities schedules and capacity guard` |
+| **5. Conversational pipeline and tool contracts** | Pending | Real provider adapter; all PRD tools; top30/trigram/last-touched/last6-message context; schema/date/ownership/duplicate/ambiguity checks; bounded 8s parsing/retry budget; one clarification and defined partial-success policy. Correct message IDs, action cards, Undo deadlines and spoken replies. Regex/Inbox fallback only on parser failure; out-of-scope replies cause no writes. | Mock/recorded integration tests for every tool and failure; 50-utterance golden set >=90%; prompt injection/ownership guards; idempotency same-payload replay, concurrent retries and changed-payload409. Reply <=60 words; spoken reply <=25. | `feat(chat): integrate validated tool-calling pipeline` |
+| **6. Reminders, Web Push and scheduled workers** | Pending | Compute/cancel/recompute reminders inside mutation transactions; custom overrides, preferences, plan-block reminders, notification history, next-three-slot rescheduling and analytics logs. Subscription/VAPID delivery; 30s polling with SKIP LOCKED; mark sent only after successful delivery; retry/dedupe, per-user10-minute merge, missed threshold, 410 cleanup, heartbeat. Hourly priority, daily plan, nightly analytics and Sunday insight jobs. | Timing/quiet-hours and Done/Snooze idempotency tests; completion/reschedule cancels/rebuilds reminders. PostgreSQL multi-worker/crash/retry tests; failure not marked delivered; heartbeat staleness; delivery <=60s. Actual phone/laptop push tests coordinated with frontend. | `feat(reminders): deliver durable notifications and scheduled jobs` |
+| **7. Productivity insights, personalization and privacy APIs** | Pending | Database metrics: valid effort samples, last20/category, 14-day hourly rates/focus windows and chart, same-day adherence, overdue/snooze rates, onboarding cold start. Grounded LLM suggestions with nested numeric validation, allowlisted types and apply/dismiss. JSON export; account/Auth cascade deletion and subscription revocation; 90/180-day retention. Consistent errors, CORS, HTTPS/HSTS deployment configuration, redacted logs and bounded/shared rate enforcement. Streaming STT fallback if included, without audio storage. | Seeded hand calculations match; insights endpoint returns actual metrics; unknown types/invented numbers rejected; accepted suggestions alone alter settings. Two-user export/deletion isolation, cascade<=1min, retention boundaries, chat30/API300/STT5 per-user limits. Official provider retention terms documented; secret/PII scan. | `feat(insights): add grounded analytics and privacy controls` |
+| **8. CI, full verification and GitHub delivery** | Pending | Reproducible dependency lock/build; CI unit/integration gates; all six PRD workflows; golden NLU, property and concurrency checks; k6/performance; fresh Priya seed and demo checks; frontend API contract; environment and rollback docs. Track the real Backend branch, import reviewed local source and deliver reviewable commits without rewriting history. | No expected failures; 100 users/5min; p95 chat<=3s, logic<=300ms, priority500<=100ms; six E2E flows; voice>=18/20 and live push checks. Separate mocked/live evidence. Verify migrations, staged diff, secrets, branch and PR description before publication. | `ci(backend): gate releases and document deployment handoff` |
+
+## Scope boundaries
+
+The eight steps cover the backend P0 and its verification. P1 items remain optional within their related step: Google Calendar read-only import and week/load data (Step4), fuller recurrence UX support (Step3), hosted STT fallback (Step7 if time permits). Drag/voice/notification UI and browser STT/TTS belong to frontend and are integration dependencies, not additional backend steps.
+
+Postponed per PRD: vector DB/RAG, two-way calendar sync/Outlook, messaging bots, native apps, always-on listening, auto-sending extension messages and collaboration. The consolidation does not add any of these to scope.
+
+## Commit and branch rules
+
+- Track **origin/Backend** exactly; preserve its README/PRD and history. The lowercase branch `backend` is different.
+- The eight entries above are delivery milestones, not an obligation to make an oversized commit. A milestone may contain smaller tested commits. Initial scaffold import is bookkeeping within this plan, not a ninth step; label it `chore(backend): import audited backend scaffold` and document partial/501 features.
+- Stage explicit paths and inspect every staged diff. Exclude `.env`, `.venv`, caches, generated metadata and private data. Keep `.env.example` with placeholders. The Supabase root CA is public, not a private key.
+- Test each increment before committing. Do not fabricate historical commits that were never independently tested. Use ordinary pushes and a review PR; no force-push or default-branch merge without direction.
+- PR descriptions include concrete behavior, validation evidence, migration/environment changes, remaining blockers and rollback procedure.
+
+## Current evidence and limitations
+
+- Local run on 2026-11-14: **85 tests passed, 1 skipped** (the opt-in PostgreSQL security suite). The suite covers validation, task/event/preference/routine lifecycle, dependency cycle protection, reminder recomputation, recurrence instance overrides, audit/Undo expiry and stale-state handling. These are unit/API-contract checks, not live database proof.
+- Live PostgreSQL migrations, RLS, locking, actual delivery, LLM accuracy and performance gates remain unverified.
+- Insights, conflict resolution and reminder reschedule currently return501 until their respective milestones are complete.
+- Migration001 was applied by the user;002 application has not been verified. Add new migrations; do not rewrite applied migration history.
+- Rotate the previously shared database password locally before deployment. Never commit `.env` or include it in a source ZIP.
+- Resolve PRD inconsistencies in the affected milestone and test the decision: whole-message transactions versus partial success; confirmation for>3 versus the example of3; deadline defaults versus quiet hours; task minimum5 minutes versus scheduling minimum25 minutes.
+
+## Mapping from the previous plan
+
+| Eight-step plan | Previous steps retained |
+| --- | --- |
+| 1 | 1 |
+| 2 | 2 |
+| 3 | 3,4,5 |
+| 4 | 6,7,8 |
+| 5 | 9 |
+| 6 | 10,11 |
+| 7 | 12,13 |
+| 8 | 14 and Git delivery workflow |
