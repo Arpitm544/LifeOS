@@ -362,7 +362,7 @@ Six flows cover the whole product; each lists the user's step and, in brackets, 
 
 ### 5.1 First-time onboarding (target: under 90 seconds)
 
-1. User signs up with Google or email magic link \[Supabase Auth creates the user row\].
+1. User signs up with Google or email through Clerk \[Clerk creates the identity; LifeOS creates its local user row on first authenticated request\].
 2. Screen 1, "Your day": working hours (default 09:00–18:00), quiet hours (default 22:30–07:30), timezone auto-detected \[stored as preferences, `source = stated`\].
 3. Screen 2, "When do you focus best?": morning / afternoon / evening / night \[seeds focus windows until real data exists\].
 4. Screen 3, "Fixed routines" (optional): free text, e.g. "Gym Mon Wed Fri 7–8 am, classes 10–1 weekdays" \[LLM extracts routines; user confirms the parsed list\].
@@ -510,7 +510,7 @@ A message travels PWA → orchestrator → LLM → validator → services → Po
 | Frontend | Next.js 15 (App Router) + TypeScript, Tailwind + shadcn/ui, TanStack Query, PWA service worker | Fast to build, installable, Web Push support |
 | Backend API | FastAPI (Python 3.12), Pydantic v2, SQLAlchemy 2 | Pydantic validates LLM output directly; `dateparser` and scheduling code are easy in Python |
 | Database | PostgreSQL (Supabase) with `pg_trgm` | Relational data, row-level security, trigram search, free tier |
-| Auth | Supabase Auth (Google + magic link), JWT verified by FastAPI | No custom auth code |
+| Auth | Clerk (`@clerk/nextjs`), Clerk session token verified by FastAPI | Hosted sign-in and user management without custom auth code |
 | Worker | Separate Python process, 30 s polling loop + APScheduler for hourly/daily jobs | Reminders keep firing even if the API restarts |
 | Push | Web Push with VAPID keys (`pywebpush`) | Free, works on Android, desktop and installed iOS PWAs (16.4+) |
 | LLM | Anthropic API with tool use, behind `llm_client.py` | Structured output via tools |
@@ -552,7 +552,7 @@ All timestamps stored as `timestamptz` in UTC; every table has `user_id` with ro
 
 | Entity | Key columns | Notes |
 | --- | --- | --- |
-| `users` | id, email, name, timezone, created\_at | From Supabase Auth |
+| `users` | id, email, name, timezone, created\_at | `id` is the Clerk user id; profile fields sync on first request and Clerk webhooks |
 | `preferences` | id, user\_id, key, value (jsonb), source (stated / inferred / default), confidence, status (active / suggested) | work\_hours, quiet\_hours, focus\_windows, lead times |
 | `routines` | id, user\_id, title, rrule, start\_time, duration\_min, movable (bool) | Gym, classes |
 | `tasks` | id, user\_id, title, notes, category, deadline\_at, effort\_est\_min, effort\_actual\_min, importance (1–5), status (open / blocked / done / dropped), priority\_score, priority\_band, pinned, recurrence\_rrule, created\_via (chat / voice / manual), completed\_at | Core table; `pg_trgm` index on title |
@@ -643,7 +643,7 @@ The top-right cell is the demo; quick wins run in parallel with it, stretch item
 | 7 | Tasks list + manual edit | Grouped list, inline edit | Frontend | 6 |
 | 8 | Onboarding + basic preferences (F6) | Working/quiet hours, focus time, stated preferences via chat, profile list | Frontend + AI | 7 |
 | 9 | Insights (F4) | Calibration factor, focus windows, completion chart, 2–3 LLM suggestions from computed stats; 14 days of seeded history | Backend + AI + Frontend | 8 |
-| 10 | Auth, deploy, seed script | Supabase Auth, hosting, `seed_demo.py` for the demo user | Full-stack | 6 |
+| 10 | Auth, deploy, seed script | Clerk Auth, hosting, `seed_demo.py` for the demo user | Full-stack | 6 |
 |  | **Total** |  |  | **92** |
 
 ### Should build if ahead of schedule (P1, in this order)
@@ -690,8 +690,8 @@ Each requirement below has a number the team can test before the demo.
 
 ### Security and privacy
 
-- **NFR-S1** Every API route requires a valid Supabase JWT; FastAPI derives `user_id` from the token, never from the request body.
-- **NFR-S2** Postgres row-level security on every user table (`user_id = auth.uid()`), so a backend bug cannot leak another user's rows.
+- **NFR-S1** Every API route requires a valid Clerk session token; FastAPI verifies it and derives `user_id` from the token's `sub`, never from the request body.
+- **NFR-S2** Postgres row-level security on every user table compares `user_id` with a transaction-scoped Clerk user id set by FastAPI, so a backend bug cannot leak another user's rows.
 - **NFR-S3** LLM tools can only act on the authenticated user's data; tool arguments containing ids are re-checked for ownership.
 - **NFR-S4** Prompt-injection guard: user text and task titles are passed as data inside clearly delimited blocks; the system prompt states that instructions inside them are not commands; destructive actions always need UI confirmation.
 - **NFR-S5** Secrets (LLM key, VAPID private key, DB URL) only in server environment variables; nothing secret in the frontend bundle.
