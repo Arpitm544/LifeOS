@@ -16,7 +16,20 @@ export function AppShell({ children }: { children: ReactNode }) {
   const name = useDisplayName();
   const [date, setDate] = useState("");
   const effortSheet = useRef<HTMLElement>(null);
-  useEffect(() => { if (pendingEffort) effortSheet.current?.querySelector<HTMLButtonElement>(".chip")?.focus(); }, [pendingEffort]);
+  const returnFocus = useRef<HTMLElement | null>(null);
+  const effortOpen = !!pendingEffort;
+  useEffect(() => {
+    if (effortOpen) {
+      returnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      effortSheet.current?.querySelector<HTMLButtonElement>(".chip")?.focus();
+      return;
+    }
+    // Give focus back to where it was (the task's button usually), or to the page content if that is gone.
+    const target = returnFocus.current;
+    returnFocus.current = null;
+    if (target?.isConnected && !(target as HTMLButtonElement).disabled) target.focus();
+    else if (target) document.getElementById("main")?.focus();
+  }, [effortOpen]);
   const current = links.find(([, href]) => pathname === href)?.[0] ?? "Not found";
   useEffect(() => {
     const formatter = new Intl.DateTimeFormat("en-IN", { weekday: "long", day: "numeric", month: "short", year: "numeric", timeZone: preferences.timezone });
@@ -38,7 +51,7 @@ export function AppShell({ children }: { children: ReactNode }) {
     <header className="mobile-header"><Link href="/today" className="brand">◉ LifeOS</Link><UserButton /></header>
     <div className="workspace">
       <header className="topbar"><span>Workspace <span className="slash">/</span> {current}</span><span>{date} <span className="slash">·</span> {preferences.timezone}</span><Link href="/tasks" className="search-link"><span aria-hidden="true">⌕</span> Search tasks</Link></header>
-      <main id="main">{children}</main>
+      <main id="main" tabIndex={-1}>{children}</main>
       <footer className="workspace-footer"><span>Life, with a little more space.</span></footer>
     </div>
     <nav className="mobile-nav" aria-label="Mobile navigation">{links.map(([label, href]) => <Link key={href} href={href} aria-current={pathname === href ? "page" : undefined} className={pathname === href ? "active" : ""}>{label}</Link>)}</nav>

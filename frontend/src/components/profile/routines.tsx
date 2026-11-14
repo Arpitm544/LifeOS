@@ -34,10 +34,11 @@ export function Routines() {
   async function remove(id: string) {
     if (busy) return;
     setError(""); setBusy(true);
-    try { await api(`/api/preferences/routines/${id}?confirmed=true`, { method: "DELETE" }); setConfirm(""); notify("Routine removed."); }
-    catch (e) { setError(readableError(e, "Could not remove the routine.")); }
-    finally { setBusy(false); }
+    try { await api(`/api/preferences/routines/${id}?confirmed=true`, { method: "DELETE" }); }
+    catch (e) { setError(readableError(e, "Could not remove the routine.")); setBusy(false); return; }
+    setConfirm(""); notify("Routine removed.");
     await load();
+    setBusy(false);
   }
 
   return <section className="panel routines" aria-labelledby="routines-title"><h2 id="routines-title">Routines</h2><p className="muted">Repeating commitments the planner works around.</p>

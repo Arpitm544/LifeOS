@@ -20,9 +20,10 @@ export function KnownFacts() {
     try {
       await api(action === "delete" ? `/api/preferences/${row.id}?confirmed=true` : `/api/preferences/${row.id}/accept`, { method: action === "delete" ? "DELETE" : "POST" });
     } catch (e) { setError(readableError(e)); setBusy(""); return; }
-    setConfirm(""); setBusy("");
+    setConfirm("");
     notify(action === "delete" ? "Removed. LifeOS uses the default again." : "Accepted.");
     await reloadPreferences().catch(() => setError("Saved, but the list could not be refreshed. Reload the page."));
+    setBusy("");
   }
 
   const rows = [...preferenceRows].sort((a, b) => a.key.localeCompare(b.key));

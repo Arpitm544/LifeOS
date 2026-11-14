@@ -45,7 +45,7 @@ tests/                    # API client, validation, timezone filters and prefere
 - Responsive desktop and mobile navigation across all five screens.
 - Create, edit, complete, reopen and delete tasks; title search and time-aware filters.
 - Clerk sign-in/sign-up, protected workspace pages, and account/sign-out controls.
-- Tasks, preferences, routines, Today, Insights and chat are loaded from and saved to the backend API.
+- Tasks, preferences, routines, Today and Insights are loaded from and saved to the backend API. Chat requests go to the API, but the conversation on screen is kept only for the current visit.
 - Timezone, work/focus/quiet hours, reminder lead, estimate padding and a per-device reduced-motion setting.
 - Chat calls `POST /api/chat` and shows action cards with Undo, clarification and confirmation chips.
 

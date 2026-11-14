@@ -448,3 +448,4 @@ button.priority:hover { text-decoration: underline; }
 }
 html[data-reduced-motion="true"] { scroll-behavior: auto !important; }
 [data-reduced-motion="true"] *, [data-reduced-motion="true"] *::before, [data-reduced-motion="true"] *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+main:focus { outline: none; }

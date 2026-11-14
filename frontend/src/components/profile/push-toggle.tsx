@@ -33,12 +33,14 @@ export function PushToggle() {
       const { public_key } = await api<{ public_key: string }>("/api/push/public-key");
       const registration = await navigator.serviceWorker.register("/sw.js");
       await navigator.serviceWorker.ready;
-      const subscription = await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(public_key) });
+      const existing = await registration.pushManager.getSubscription();
+      const subscription = existing ?? await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(public_key) });
       const json = subscription.toJSON();
       try {
         await api("/api/push/subscribe", { method: "POST", body: { endpoint: json.endpoint, keys: { p256dh: json.keys?.p256dh, auth: json.keys?.auth } } });
       } catch (saveError) {
-        await subscription.unsubscribe().catch(() => undefined); // keep the browser in step with the server
+        // Roll back only a subscription this click created; never turn off one that was already there.
+        if (!existing) await subscription.unsubscribe().catch(() => undefined);
         throw saveError;
       }
       setSubscribed(true); notify("Reminders will arrive as notifications on this device.");

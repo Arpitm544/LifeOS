@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { PageHeading } from "@/components/layout/page-heading";
 import { useWorkspace } from "@/components/providers/workspace-provider";
 import { ConflictSheet } from "@/components/today/conflict-sheet";
@@ -24,9 +24,12 @@ export default function TodayPage() {
   const [conflict, setConflict] = useState<Conflict>();
   const [completing, setCompleting] = useState("");
 
+  const latestLoad = useRef(0);
   const load = useCallback(async () => {
-    try { setToday(await api<Today>("/api/today")); setError(""); }
-    catch (e) { setError(readableError(e, "Could not load today.")); }
+    // Only the newest request may update the page, so a slow earlier load cannot overwrite fresher data.
+    const request = ++latestLoad.current;
+    try { const data = await api<Today>("/api/today"); if (request === latestLoad.current) { setToday(data); setError(""); } }
+    catch (e) { if (request === latestLoad.current) setError(readableError(e, "Could not load today.")); }
   }, [api]);
   useEffect(() => { load(); }, [load]);
 
