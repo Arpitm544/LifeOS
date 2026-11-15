@@ -19,9 +19,12 @@ export function formatEffort(minutes: number) {
   return minutes >= 60 ? `${Math.floor(minutes / 60)}h${minutes % 60 ? ` ${minutes % 60}m` : ""}` : `${minutes} min`;
 }
 
+/** A span of time people read at a glance: "45 min", "2 h", "7 h 55 min" (never decimal hours like "7.9 h"). */
 export function formatHours(minutes: number) {
-  const hours = Math.round((minutes / 60) * 10) / 10;
-  return `${hours} h`;
+  const total = Math.max(0, Math.round(minutes));
+  const h = Math.floor(total / 60), m = total % 60;
+  if (!h) return `${m} min`;
+  return m ? `${h} h ${m} min` : `${h} h`;
 }
 
 export function formatDeadline(value: string | null, timezone: string) {

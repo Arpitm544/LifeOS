@@ -71,6 +71,10 @@ class PhotoReadError(RuntimeError):
     """The vision model failed or returned something unusable."""
 
 
+class PhotoBusy(PhotoReadError):
+    """The vision provider is rate limiting or out of quota; trying again later can work."""
+
+
 PHOTO_TOOL = {
     'name': 'propose_tasks',
     'description': 'Return every to-do, deadline and dated item visible in the photo as a task proposal.',
@@ -338,6 +342,9 @@ async def propose_photo(llm, media: str, data: str, *, now: datetime, tz_name: s
                                   text='Extract the tasks from this photo.', tool=PHOTO_TOOL, images=[(media, data)])
         result = normalise(raw, now=now, zone=zone, default_category=Category.other.value, source_label='photo')
     except Exception as exc:
+        response = getattr(exc, 'response', None)
+        if getattr(response, 'status_code', None) == 429:
+            raise PhotoBusy('Vision provider rate limit or quota reached') from exc
         raise PhotoReadError(str(exc)[:200]) from exc
     return {**result, 'truncated': False, 'fallback': False, 'source_chars': 0, 'source': 'photo'}
 

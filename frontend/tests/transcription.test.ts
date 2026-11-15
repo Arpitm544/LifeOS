@@ -62,3 +62,17 @@ test("the language Deepgram heard is returned with the transcript", async () => 
   assert.equal((await (await transcriptionResponse(request(), "key", "m", heard({}))).json()).language, null);
   assert.equal((await (await transcriptionResponse(request(), "key", "m", heard({ languages: ["<script>"] }))).json()).language, null);
 });
+
+test("a pinned language is sent to Deepgram instead of guessing; anything else stays multilingual", async () => {
+  const urls: string[] = [];
+  const capture = async (url: RequestInfo | URL) => { urls.push(String(url)); return provider("hola"); };
+  const pinned = (language: string) => new Request("http://localhost/api/transcribe", { method: "POST", headers: { "Content-Type": "audio/webm", "X-Transcribe-Language": language }, body: "audio" });
+  await transcriptionResponse(pinned("en"), "key", "nova-3", capture);
+  await transcriptionResponse(pinned("HI"), "key", "nova-3", capture);
+  await transcriptionResponse(pinned("es"), "key", "nova-3", capture); // not supported: stays multilingual
+  await transcriptionResponse(pinned("xx; drop"), "key", "nova-3", capture);
+  assert.match(urls[0], /language=en&/);
+  assert.match(urls[1], /language=hi&/);
+  assert.match(urls[2], /language=multi&/);
+  assert.match(urls[3], /language=multi&/);
+});

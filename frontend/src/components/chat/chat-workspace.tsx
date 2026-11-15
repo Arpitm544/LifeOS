@@ -29,7 +29,7 @@ export function ChatWorkspace() {
   const sending = messages.some(message => message.status === "sending");
   const [language, setLanguage] = useState<LanguageSetting>("auto");
   const heard = useRef<string | null>(null);
-  const voiceInput = useVoiceInput((value, spoken) => { setText(value); heard.current = spoken; input.current?.focus(); });
+  const voiceInput = useVoiceInput((value, spoken) => { setText(value); heard.current = spoken; input.current?.focus(); }, { language: () => language === "auto" ? null : language });
   const voiceOutput = useVoiceOutput(setVoiceError);
 
   const [welcome, setWelcome] = useState(false);

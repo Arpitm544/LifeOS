@@ -2,7 +2,46 @@
 
 import { useEffect, useRef, useState } from "react";
 
-export function useVoiceInput(onTranscript: (text: string, language: string | null) => void) {
+const silenceAfterSpeechMs = 1200; // stop this long after the last word
+const nothingHeardMs = 8000; // give up if nobody speaks at all
+
+/**
+ * Watches microphone level so recording ends when the speaker does, instead of waiting for a tap or the 30 s cap.
+ * The threshold adapts to the room: it is set from the noise floor in the first half second.
+ * Returns a cleanup function; without Web Audio it does nothing and the stop button still works.
+ */
+function watchForSilence(media: MediaStream, onDone: (heardSpeech: boolean) => void) {
+  const Context = (globalThis as { AudioContext?: typeof AudioContext; webkitAudioContext?: typeof AudioContext }).AudioContext
+    ?? (globalThis as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+  if (typeof Context !== "function") return () => {};
+  const context = new Context();
+  const analyser = context.createAnalyser();
+  analyser.fftSize = 1024;
+  context.createMediaStreamSource(media).connect(analyser);
+  const samples = new Float32Array(analyser.fftSize);
+  const started = performance.now();
+  let floor = 0, floorReadings = 0, heard = false, quietSince = 0, finished = false;
+  const interval = setInterval(() => {
+    analyser.getFloatTimeDomainData(samples);
+    let sum = 0;
+    for (const s of samples) sum += s * s;
+    const level = Math.sqrt(sum / samples.length);
+    const now = performance.now();
+    if (now - started < 500) { floor = (floor * floorReadings + level) / ++floorReadings; return; }
+    const threshold = Math.max(0.015, floor * 2.5);
+    if (level > threshold) { heard = true; quietSince = 0; return; }
+    if (heard) {
+      quietSince ||= now;
+      if (now - quietSince >= silenceAfterSpeechMs && !finished) { finished = true; onDone(true); }
+    } else if (now - started >= nothingHeardMs && !finished) { finished = true; onDone(false); }
+  }, 100);
+  return () => { clearInterval(interval); void context.close().catch(() => undefined); };
+}
+
+/** `language` returns a language the user pinned (e.g. "es"), sent as a hint so Deepgram doesn't have to guess. */
+export function useVoiceInput(onTranscript: (text: string, language: string | null) => void, options: { language?: () => string | null } = {}) {
+  const pinned = useRef(options.language);
+  useEffect(() => { pinned.current = options.language; });
   const [supported, setSupported] = useState<boolean | null>(null);
   const [listening, setListening] = useState(false);
   const [processing, setProcessing] = useState(false);
@@ -14,12 +53,14 @@ export function useVoiceInput(onTranscript: (text: string, language: string | nu
   const callback = useRef(onTranscript);
   const recording = useRef<{ audio: Blob; prefix: string } | null>(null);
   const [canRetry, setCanRetry] = useState(false);
+  const stopWatching = useRef<(() => void) | null>(null);
 
   useEffect(() => { callback.current = onTranscript; }, [onTranscript]);
 
   function releaseMicrophone() {
     if (timer.current) clearTimeout(timer.current);
     timer.current = null;
+    stopWatching.current?.(); stopWatching.current = null;
     stream.current?.getTracks().forEach(track => track.stop());
     stream.current = null;
   }
@@ -54,7 +95,7 @@ export function useVoiceInput(onTranscript: (text: string, language: string | nu
     let retryable = true;
     try {
       const response = await fetch("/api/transcribe", {
-        method: "POST", headers: { "Content-Type": saved.audio.type }, body: saved.audio,
+        method: "POST", headers: { "Content-Type": saved.audio.type, ...(pinned.current?.() ? { "X-Transcribe-Language": pinned.current()! } : {}) }, body: saved.audio,
         signal: AbortSignal.any([controller.signal, AbortSignal.timeout(30_000)]),
       });
       retryable = response.status === 429 || response.status >= 500;
@@ -100,6 +141,12 @@ export function useVoiceInput(onTranscript: (text: string, language: string | nu
       };
       instance.start(); setListening(true); setProcessing(false);
       timer.current = setTimeout(() => { if (instance.state === "recording") instance.stop(); }, 30_000);
+      stopWatching.current = watchForSilence(media, heardSpeech => {
+        if (instance.state !== "recording") return;
+        if (heardSpeech) { instance.stop(); return; }
+        // Nothing was said: don't upload silence (it costs quota and only returns "no speech").
+        cancel(); setError("Didn’t catch anything. Tap the mic and try again, or type your message.");
+      });
     } catch (e) {
       if (controller.signal.aborted) return;
       cancel();

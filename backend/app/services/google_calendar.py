@@ -45,6 +45,10 @@ class NotConfigured(GoogleError):
     pass
 
 
+class ScopeNotGranted(GoogleError):
+    """The user finished Google's consent screen without ticking calendar access."""
+
+
 class Revoked(GoogleError):
     """Google no longer accepts the stored refresh token; the user must reconnect."""
 
@@ -131,7 +135,7 @@ async def exchange_code(http: httpx.AsyncClient, code: str) -> str:
     if response.status_code != 200 or not body.get('refresh_token'):
         raise GoogleError('Google did not complete the connection. Try again.')
     if SCOPE not in str(body.get('scope', '')).split():
-        raise GoogleError('Calendar access was not granted. Connect again and allow calendar access.')
+        raise ScopeNotGranted('Calendar access was not granted. Connect again and allow calendar access.')
     return body['refresh_token']
 
 

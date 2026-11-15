@@ -9,7 +9,7 @@ function setup(fetcher: typeof fetch, extra: Record<string, unknown> = {}) {
   let index = 0, first = true, paused = 0;
   const useState = (initial: unknown) => { const i = index++; if (first) slots[i] = initial; return [slots[i], (value: unknown) => { slots[i] = value; }]; };
   const useRef = (initial: unknown) => { const i = index++; if (first) slots[i] = { current: initial }; return slots[i]; };
-  const useEffect = (effect: () => (() => void)) => { if (first) cleanups.push(effect()); };
+  const useEffect = (effect: () => unknown) => { if (first) { const cleanup = effect(); if (typeof cleanup === "function") cleanups.push(cleanup as () => void); } };
   const source = readFileSync(new URL("../src/hooks/use-voice-output.ts", import.meta.url), "utf8").replace(/import .* from "react";/, "").replace("export function useVoiceOutput", "function useVoiceOutput");
   const hook = runInNewContext(stripTypeScriptTypes(source) + "; useVoiceOutput;", {
     useState, useRef, useEffect, AbortController, AbortSignal, fetch: fetcher,
@@ -114,4 +114,46 @@ test("a missing device voice is explained instead of failing silently", async ()
   const none = setup(async () => Response.json({ code: "unsupported_language" }, { status: 422 }));
   await none.render().read("नमस्ते", "hi-IN");
   assert.match(none.errors[0], /not supported in this browser/);
+});
+
+test("reading the same reply again plays from memory without another request", async () => {
+  let calls = 0;
+  const env = setup(async () => { calls++; return new Response("mp3", { headers: { "Content-Type": "audio/mpeg" } }); });
+  await env.render().read("Your day fits.");
+  env.render().stop();
+  await env.render().read("Your day fits.");
+  assert.equal(calls, 1);
+  assert.equal(env.render().url, "blob:reply");
+  assert.equal(env.render().loading, false);
+  await env.render().read("Something new.");
+  assert.equal(calls, 2);
+  env.cleanup();
+});
+
+test("over the voice limit, the device voice keeps talking; without one the limit is reported", async () => {
+  const speech = browserSpeech([{ lang: "en-US" }]);
+  const env = setup(async () => Response.json({ error: "Voice limit reached." }, { status: 429 }), speech.globals);
+  const hook = env.render();
+  await hook.read("Your day fits.");
+  assert.deepEqual(env.errors, []);
+  assert.equal(speech.spoken.length, 1);
+  assert.equal(speech.spoken[0].lang, "en-US");
+  const limited = setup(async () => Response.json({ error: "Voice limit reached." }, { status: 429 }));
+  await limited.render().read("Your day fits.");
+  assert.deepEqual(limited.errors, ["Voice limit reached."]);
+});
+
+test("device voices that load late (Chrome) are waited for instead of reported missing", async () => {
+  const speech = browserSpeech([]);
+  let voices: { lang: string }[] = [];
+  let loaded: (() => void) | undefined;
+  const synth = { ...speech.globals.speechSynthesis, getVoices: () => voices, addEventListener: (_: string, fn: () => void) => { loaded = fn; } };
+  const env = setup(async () => Response.json({ code: "unsupported_language" }, { status: 422 }), { ...speech.globals, speechSynthesis: synth, setTimeout, clearTimeout });
+  const reading = env.render().read("नमस्ते", "hi-IN");
+  await new Promise(resolve => setImmediate(resolve));
+  voices = [{ lang: "hi-IN" }]; loaded?.();
+  await reading;
+  assert.deepEqual(env.errors, []);
+  assert.equal(speech.spoken.length, 1);
+  assert.equal(speech.spoken[0].lang, "hi-IN");
 });

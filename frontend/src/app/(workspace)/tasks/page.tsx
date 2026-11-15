@@ -27,8 +27,17 @@ export default function TasksPage() {
       const el = e.target as HTMLElement;
       if (e.key === "/" && !["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName) && !el.isContentEditable) { e.preventDefault(); input.current?.focus(); }
     }
+    // The top bar's search button lands here with ?search=1, or sends an event when Tasks is already open.
+    const focusSearch = () => input.current?.focus();
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("search") === "1") {
+      focusSearch();
+      params.delete("search");
+      window.history.replaceState(null, "", `/tasks${params.toString() ? `?${params}` : ""}`);
+    }
     document.addEventListener("keydown", shortcut);
-    return () => document.removeEventListener("keydown", shortcut);
+    window.addEventListener("lifeos:focus-search", focusSearch);
+    return () => { document.removeEventListener("keydown", shortcut); window.removeEventListener("lifeos:focus-search", focusSearch); };
   }, []);
 
   useEffect(() => { if (editing) dialog.current?.showModal(); }, [editing]);

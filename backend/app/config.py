@@ -43,8 +43,13 @@ class Settings(BaseSettings):
     # Photo import needs a model that reads images; see configured_vision_llm.
     vision_provider: str = ""
     vision_model: str = ""
+    # How hard Gemini thinks before reading a photo. Its default spent ~2,600 thinking tokens (~20 s) on a to-do photo;
+    # "low" still resolves dates and handwriting. "" leaves the model's default (none, minimal, low, medium, high).
+    vision_reasoning_effort: str = "low"
     chat_rate_limit: int = Field(default=30, gt=0)
     api_rate_limit: int = Field(default=300, gt=0)
+    # Per user per minute, for each of speech-to-text and text-to-speech. A voice conversation uses one of each per turn.
+    voice_rate_limit: int = Field(default=20, gt=0)
     vapid_public_key: str = ""
     vapid_private_key: str = ""
     vapid_subject: str = "mailto:admin@example.com"

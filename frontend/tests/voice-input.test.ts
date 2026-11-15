@@ -5,7 +5,7 @@ import { stripTypeScriptTypes } from "node:module";
 import { runInNewContext } from "node:vm";
 
 // Run the hook with browser/React fakes to check lifecycle without microphone hardware.
-function setup(fetcher: typeof fetch, getMedia?: () => Promise<unknown>) {
+function setup(fetcher: typeof fetch, getMedia?: () => Promise<unknown>, extra: Record<string, unknown> = {}) {
   const slots: any[] = [], cleanups: (() => void)[] = [];
   let index = 0, first = true, stopped = 0, transcript = "", timeout: (() => void) | undefined;
   const useState = (initial: unknown) => { const i = index++; if (first) slots[i] = initial; return [slots[i], (value: unknown) => { slots[i] = value; }]; };
@@ -25,7 +25,7 @@ function setup(fetcher: typeof fetch, getMedia?: () => Promise<unknown>) {
     useState, useRef, useEffect, MediaRecorder: Recorder, Blob, AbortController, AbortSignal, DOMException,
     navigator: { mediaDevices: { getUserMedia: getMedia || (async () => media) } },
     window: { isSecureContext: true, MediaRecorder: Recorder, speechSynthesis: { cancel() {} } },
-    fetch: fetcher, setTimeout: (fn: () => void) => { timeout = fn; return 1; }, clearTimeout: () => { timeout = undefined; },
+    fetch: fetcher, setTimeout: (fn: () => void) => { timeout = fn; return 1; }, clearTimeout: () => { timeout = undefined; }, ...extra,
   });
   const render = () => { index = 0; const value = hook((text: string) => { transcript = text; }); first = false; return value; };
   return { render, cleanup: () => cleanups.forEach(fn => fn()), stopped: () => stopped, transcript: () => transcript, expire: () => timeout?.() };
@@ -111,4 +111,51 @@ test("network and server failures retain audio for retry", async () => {
     assert.equal(env.render().canRetry, true);
     env.cleanup();
   }
+});
+
+// A fake Web Audio meter: `speak(ms, level)` feeds that microphone level for `ms` of 100 ms ticks.
+function fakeMeter() {
+  let level = 0, now = 0, closed = 0, tick: (() => void) | undefined;
+  class Context {
+    createAnalyser() { return { fftSize: 0, getFloatTimeDomainData: (samples: Float32Array) => samples.fill(level) }; }
+    createMediaStreamSource() { return { connect() {} }; }
+    close() { closed++; return Promise.resolve(); }
+  }
+  return {
+    globals: { AudioContext: Context, performance: { now: () => now }, setInterval: (fn: () => void) => { tick = fn; return 2; }, clearInterval: () => { tick = undefined; } },
+    speak(ms: number, value: number) { level = value; for (let t = 0; t < ms; t += 100) { now += 100; tick?.(); } },
+    closed: () => closed,
+  };
+}
+
+test("recording stops by itself after the speaker goes quiet, then transcribes", async () => {
+  let uploads = 0;
+  const meter = fakeMeter();
+  const env = setup(async () => { uploads++; return Response.json({ text: "essay due friday" }); }, undefined, meter.globals);
+  await env.render().toggle();
+  meter.speak(500, 0.005); // room noise while the meter calibrates
+  meter.speak(1500, 0.2); // talking
+  meter.speak(800, 0.005); // a short pause is not the end
+  assert.equal(env.render().listening, true);
+  meter.speak(600, 0.005); // 1.4 s of quiet in total: done
+  await settle();
+  assert.equal(env.render().listening, false);
+  assert.equal(uploads, 1);
+  assert.equal(env.transcript(), "essay due friday");
+  assert.equal(meter.closed(), 1);
+  env.cleanup();
+});
+
+test("if nobody speaks, recording is cancelled without uploading silence", async () => {
+  let uploads = 0;
+  const meter = fakeMeter();
+  const env = setup(async () => { uploads++; return Response.json({ text: "" }); }, undefined, meter.globals);
+  await env.render().toggle();
+  meter.speak(8500, 0.004);
+  await settle();
+  assert.equal(uploads, 0);
+  assert.equal(env.render().listening, false);
+  assert.equal(env.stopped(), 1);
+  assert.match(env.render().error, /catch anything/);
+  env.cleanup();
 });

@@ -68,3 +68,32 @@ export function saveSummary(result: SaveResult): string {
   const short = result.conflicts.length ? ` ${result.conflicts.length} deadline${result.conflicts.length === 1 ? " is" : "s are"} tight — see Today for options.` : "";
   return `${added}${blocks}.${short}`;
 }
+
+/** What the reading screen says while the model works; reads can take 5–30 s, so the message moves on. */
+export function readingMessage(elapsedSeconds: number, source: "photo" | "pdf" | "text"): string {
+  const steps = source === "photo"
+    ? ["Looking at your photo…", "Reading the handwriting…", "Working out the dates…", "Almost there…"]
+    : ["Reading your syllabus…", "Finding the deadlines…", "Working out the dates…", "Almost there…"];
+  const index = elapsedSeconds < 3 ? 0 : elapsedSeconds < 8 ? 1 : elapsedSeconds < 15 ? 2 : 3;
+  return steps[index];
+}
+
+/** "45 min", "2 h", "3 h 15 min". */
+export function formatMinutes(total: number): string {
+  const minutes = Math.max(0, Math.round(total));
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60), rest = minutes % 60;
+  return rest ? `${hours} h ${rest} min` : `${hours} h`;
+}
+
+/** "820 KB", "2.4 MB". */
+export function formatBytes(bytes: number): string {
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** Selected count and total effort, for the review summary. */
+export function selectionSummary(rows: ReviewRow[]): { count: number; minutes: number } {
+  const chosen = rows.filter(row => row.selected);
+  return { count: chosen.length, minutes: chosen.reduce((sum, row) => sum + (Number.isFinite(row.effort_est_min) ? row.effort_est_min : 0), 0) };
+}

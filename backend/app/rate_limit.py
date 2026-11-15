@@ -93,7 +93,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if request.method == "POST" and request.url.path == "/api/import/syllabus/extract":
             limits.append(('import', 10))  # each extraction is a large model call
         if request.method == "POST" and request.url.path in ("/api/voice/transcribe/quota", "/api/voice/speak/quota"):
-            limits.append(('stt' if '/transcribe/' in request.url.path else 'tts', 5))
+            limits.append(('stt' if '/transcribe/' in request.url.path else 'tts', getattr(settings, 'voice_rate_limit', 20)))
         for bucket, limit in limits:
             result = self.limiter.allow(identity=identity, bucket=bucket, limit=limit)
             import inspect

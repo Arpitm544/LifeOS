@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { bytesToBase64, extractNotes, saveSummary, selectedTasks, toReviewRows, uploadKind, type ExtractResult, type SyllabusProposal } from "../src/lib/syllabus.ts";
+import { bytesToBase64, extractNotes, formatBytes, formatMinutes, readingMessage, saveSummary, selectedTasks, selectionSummary, toReviewRows, uploadKind, type ExtractResult, type SyllabusProposal } from "../src/lib/syllabus.ts";
 
 const proposal: SyllabusProposal = { title: "Prepare for Midterm", kind: "exam", deadline_at: "2026-12-01T09:00:00+00:00", effort_est_min: 360, importance: 5, category: "study", notes: "From syllabus: \"Midterm Dec 1\"" };
 
@@ -46,4 +46,26 @@ test("photo results explain undated items", () => {
   const base: ExtractResult = { course: "", proposals: [{ ...proposal, deadline_at: null }], skipped_past: 0, skipped_invalid: 0, capped: false, truncated: false, fallback: false, source_chars: 0, timezone: "UTC", source: "photo" };
   assert.deepEqual(extractNotes(base), ["Items without a date will be added without a deadline. Add one if you need it."]);
   assert.deepEqual(extractNotes({ ...base, source: "text" }), []);
+});
+
+test("reading message moves on as the wait grows", () => {
+  assert.equal(readingMessage(0, "photo"), "Looking at your photo…");
+  assert.equal(readingMessage(5, "photo"), "Reading the handwriting…");
+  assert.equal(readingMessage(10, "pdf"), "Working out the dates…");
+  assert.equal(readingMessage(40, "text"), "Almost there…");
+});
+
+test("minutes and bytes read naturally", () => {
+  assert.equal(formatMinutes(45), "45 min");
+  assert.equal(formatMinutes(120), "2 h");
+  assert.equal(formatMinutes(195), "3 h 15 min");
+  assert.equal(formatBytes(500), "1 KB");
+  assert.equal(formatBytes(820 * 1024), "820 KB");
+  assert.equal(formatBytes(2.4 * 1024 * 1024), "2.4 MB");
+});
+
+test("selection summary counts only ticked rows", () => {
+  const rows = toReviewRows([proposal, { ...proposal, title: "Lab", effort_est_min: 60 }]);
+  rows[0].selected = false;
+  assert.deepEqual(selectionSummary(rows), { count: 1, minutes: 60 });
 });

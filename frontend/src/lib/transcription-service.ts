@@ -1,5 +1,8 @@
 const maxAudioBytes = 4_000_000;
 const formats: Record<string, string> = { "audio/webm": "webm", "audio/mp4": "m4a", "audio/ogg": "ogg", "audio/wav": "wav" };
+// A language pinned in Chat settings (English or Hindi) is sent to Deepgram as-is. "Auto" uses "multi", which
+// is built for English and Hindi mixed together (Hinglish), so it suits people who switch between the two.
+const pinnable = new Set(["en", "hi"]);
 
 export async function transcriptionResponse(request: Request, apiKey: string | undefined, model: string, fetcher: typeof fetch = fetch) {
   const headers = { "Cache-Control": "no-store" };
@@ -21,7 +24,8 @@ export async function transcriptionResponse(request: Request, apiKey: string | u
       chunks.push(new Uint8Array(value));
     }
     if (!size) return error("No audio received. Please record again.", 400);
-    const query = new URLSearchParams({ model, language: "multi", smart_format: "true" });
+    const hint = request.headers.get("x-transcribe-language")?.trim().toLowerCase() ?? "";
+    const query = new URLSearchParams({ model, language: pinnable.has(hint) ? hint : "multi", smart_format: "true" });
     const response = await fetcher(`https://api.deepgram.com/v1/listen?${query}`, {
       method: "POST", headers: { Authorization: `Token ${apiKey}`, "Content-Type": type }, body: new Blob(chunks, { type }),
       signal: AbortSignal.any([request.signal, AbortSignal.timeout(25_000)]),

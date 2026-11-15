@@ -49,8 +49,8 @@ def test_risks_come_first_with_one_action_each():
     brief = bs.compose(data(overdue=[late], soon_unplanned=[soon], open_count=3, blocks_today=[block],
                             conflicts=[conflict], titles={str(t.id): t.title for t in (report, late, soon)}))
     assert brief['headline'] == 'Good morning. 1 deadline is at risk, and I have a fix ready.'
-    assert "Heads up: you're 2.0 h short before Fri 20 Nov 08:00." in brief['lines']
-    assert '1 focus block planned (1.5 h); next is DBMS report at 10:00.' in brief['lines']
+    assert "Heads up: you're 2 h short before Fri 20 Nov 08:00." in brief['lines']
+    assert '1 focus block planned (1 h 30 min); next is DBMS report at 10:00.' in brief['lines']
     kinds = [n['kind'] for n in brief['nudges']]
     assert kinds == ['conflict', 'overdue', 'unplanned']
     assert brief['nudges'][0]['action'] == {'type': 'open_conflict', 'conflict_id': str(conflict.id), 'label': 'See fixes'}
@@ -105,7 +105,7 @@ def test_push_message_carries_the_risk():
     conflict = SimpleNamespace(id=uuid4(), needed_min=300, free_min=120, deadline_at=NOW + timedelta(days=1), task_ids=[])
     brief = bs.compose(data(conflicts=[conflict], open_count=1))
     assert bs.push_message(brief) == ("Good morning. 1 deadline is at risk, and I have a fix ready. "
-                                      "Heads up: you're 3.0 h short before tomorrow 08:00.")
+                                      "Heads up: you're 3 h short before tomorrow 08:00.")
 
 
 def test_morning_push_is_sent_for_risk_even_without_blocks():

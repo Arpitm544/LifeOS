@@ -27,7 +27,13 @@ def _utc(value: datetime) -> datetime:
 
 
 def _hours(minutes: int) -> str:
-    return f'{minutes / 60:.1f} h'
+    """A span people read at a glance: '45 min', '2 h', '1 h 30 min' (matches the app's formatHours)."""
+    total = max(0, round(minutes))
+    h, m = divmod(total, 60)
+    if not h:
+        return f'{m} min'
+    return f'{h} h {m} min' if m else f'{h} h'
+
 
 
 def _when(moment: datetime, zone: ZoneInfo, today: date) -> str:

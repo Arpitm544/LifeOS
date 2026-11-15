@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { compareDeadlines, comparePriority, describePreference, describeRule, filterTasks, formatEffort, localDateKey, preferencesFromRows, preferenceUpdates, routineRule, validatePreferences, validateTask } from "../src/lib/task-utils.ts";
+import { compareDeadlines, comparePriority, describePreference, describeRule, filterTasks, formatEffort, formatHours, localDateKey, preferencesFromRows, preferenceUpdates, routineRule, validatePreferences, validateTask } from "../src/lib/task-utils.ts";
 import type { PreferenceRow, Preferences, Task } from "../src/lib/types.ts";
 
 const task: Task = { id: "1", title: "Study", deadline_at: "2026-11-14T19:00:00Z", effort_est_min: 30, importance: 3, category: "study", status: "open", priority_score: 50, priority_band: "P2", pinned: false };
@@ -79,4 +79,13 @@ test("preference rows and routines read as plain language", () => {
   assert.equal(routineRule(["FR", "MO"]), "FREQ=WEEKLY;BYDAY=MO,FR");
   assert.equal(describeRule("FREQ=WEEKLY;BYDAY=MO,WE"), "Mon, Wed");
   assert.equal(describeRule("RRULE:FREQ=DAILY"), "Every day");
+});
+
+test("durations read as hours and minutes, never decimal hours", () => {
+  assert.equal(formatHours(0), "0 min");
+  assert.equal(formatHours(30), "30 min");
+  assert.equal(formatHours(60), "1 h");
+  assert.equal(formatHours(474), "7 h 54 min");
+  assert.equal(formatHours(89.6), "1 h 30 min");
+  assert.equal(formatHours(-15), "0 min");
 });

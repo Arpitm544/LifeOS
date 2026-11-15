@@ -223,6 +223,12 @@ def test_endpoint_explains_missing_vision_bad_photos_and_model_failures(monkeypa
     with pytest.raises(HTTPException) as failed:
         call_extract(monkeypatch, {'image_base64': b64(JPEG)}, vision=VisionLLM(RuntimeError('timeout')))
     assert failed.value.status_code == 502 and 'clearer' in failed.value.detail
+    import httpx
+    request = httpx.Request('POST', 'https://example.invalid')
+    quota = httpx.HTTPStatusError('429', request=request, response=httpx.Response(429, request=request))
+    with pytest.raises(HTTPException) as busy:
+        call_extract(monkeypatch, {'image_base64': b64(JPEG)}, vision=VisionLLM(quota))
+    assert busy.value.status_code == 503 and 'usage limit' in busy.value.detail
 
 
 def test_text_imports_get_the_longer_import_timeout(monkeypatch):
@@ -267,3 +273,37 @@ def test_other_provider_errors_are_not_retried(monkeypatch):
     with pytest.raises(httpx.HTTPStatusError):
         asyncio.run(client.call_tool(system='s', text='t', tool=TOOL))
     assert len(calls) == 1
+
+
+def test_gemini_photo_calls_think_less_by_default(monkeypatch):
+    # Gemini's default thinking took ~20 s per photo; a lower effort keeps the read and cuts the wait.
+    use_settings(monkeypatch, gemini_api_key='m')
+    assert llm_client.configured_vision_llm().reasoning_effort == 'low'
+    use_settings(monkeypatch, gemini_api_key='m', vision_reasoning_effort='')
+    assert llm_client.configured_vision_llm().reasoning_effort == ''
+    use_settings(monkeypatch, gemini_api_key='m', vision_reasoning_effort='Medium')
+    assert llm_client.configured_vision_llm().reasoning_effort == 'medium'
+    # Other providers never get the parameter (gpt-4o-mini rejects it).
+    use_settings(monkeypatch, openai_api_key='o')
+    assert llm_client.configured_vision_llm().reasoning_effort == ''
+    # Chat calls are untouched.
+    use_settings(monkeypatch, gemini_api_key='m')
+    assert llm_client.configured_llm().reasoning_effort == ''
+
+
+def test_reasoning_effort_is_sent_and_dropped_on_a_400_retry(monkeypatch):
+    import httpx
+    client = llm_client.OpenAICompatibleLLMClient('k', 'gemini-3.5-flash', url='https://example.invalid/chat/completions', provider='Gemini')
+    client.reasoning_effort = 'low'
+    bodies = []
+
+    async def respond(body):
+        bodies.append(body)
+        if len(bodies) == 1:
+            request = httpx.Request('POST', client.url)
+            raise httpx.HTTPStatusError('bad', request=request, response=httpx.Response(400, request=request))
+        return {'choices': [{'message': {'tool_calls': [{'function': {'name': 'propose_tasks', 'arguments': '{"items": []}'}}]}}]}
+
+    monkeypatch.setattr(client, '_post', respond)
+    asyncio.run(client.call_tool(system='s', text='t', tool=TOOL, images=[('image/png', 'QUJD')]))
+    assert bodies[0]['reasoning_effort'] == 'low' and 'reasoning_effort' not in bodies[1]
