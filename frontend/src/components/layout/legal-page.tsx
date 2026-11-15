@@ -2,7 +2,7 @@ import Link from "next/link";
 import "./legal-page.css";
 
 /** Contact address shown on the privacy policy and terms. Change it to the address you want users to write to. */
-export const CONTACT_EMAIL = "support@lifeos.app";
+export const CONTACT_EMAIL = "arpitmaurya840@gmail.com";
 export const LEGAL_UPDATED = "15 November 2026";
 
 export function LegalPage({ title, children }: { title: string; children: React.ReactNode }) {
