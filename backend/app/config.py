@@ -51,6 +51,21 @@ class Settings(BaseSettings):
     # Push services browsers use; subscriptions to any other host are refused.
     push_allowed_hosts: str = ("fcm.googleapis.com,updates.push.services.mozilla.com,push.services.mozilla.com,"
                                "notify.windows.com,push.apple.com")
+    # Signs the Done / Snooze buttons on push notifications. Defaults to a key derived from VAPID_PRIVATE_KEY.
+    push_action_secret: str = ""
+    # Public URL of this API, used by notification buttons in the service worker.
+    public_api_url: str = "http://127.0.0.1:8000"
+    # Google Calendar sync (read-only). Create an OAuth "Web application" client in Google Cloud Console.
+    google_client_id: str = ""
+    google_client_secret: str = ""
+    # Must exactly match an authorised redirect URI of that client.
+    google_redirect_uri: str = "http://127.0.0.1:8000/api/google/callback"
+    # Fernet key that encrypts stored refresh tokens and signs the OAuth state:
+    # python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    token_encryption_key: str = ""
+    # Where the callback sends the browser afterwards (the Next.js app).
+    frontend_url: str = "http://localhost:3000"
+    google_sync_minutes: int = Field(default=15, ge=5, le=1440)
     worker_poll_seconds: int = Field(default=30, ge=5, le=300)
     model_config = SettingsConfigDict(env_file=Path(__file__).resolve().parents[1] / '.env', extra="ignore")
 

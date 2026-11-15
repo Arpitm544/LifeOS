@@ -85,7 +85,7 @@ export type ChatAction = {
 };
 export type ChatConflict = { id: string; deadline_at: string; needed_min: number; free_min: number; shortfall_min: number; task_ids: string[]; options: string[] };
 export type ChatResponse = {
-  message_id: string | null; reply: string; actions: ChatAction[]; conflicts: ChatConflict[];
+  message_id: string | null; reply: string; spoken_reply?: string; actions: ChatAction[]; conflicts: ChatConflict[];
   clarification: { question: string; options: string[] } | null;
   confirmation: { prompt: string; options: string[] } | null;
   fallback: boolean;

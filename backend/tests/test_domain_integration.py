@@ -30,7 +30,7 @@ def test_create_edit_undo_reminders_and_dependency_cycle():
         owner = uuid4()
         async with factory() as session:
             task = await create_task(session, owner, TaskCreate(title='Report',
-                deadline_at=datetime.now(timezone.utc) + timedelta(days=3)))
+                deadline_at=(datetime.now(timezone.utc) + timedelta(days=3)).replace(hour=15, minute=0)))  # midday: keeps all 3 reminders out of quiet hours
             other = await create_task(session, owner, TaskCreate(title='Quiz'))
             await session.commit()
             before = snapshot(task)

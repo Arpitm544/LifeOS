@@ -114,7 +114,7 @@ def test_capacity_guard_detects_simulates_and_resolves_with_batch_undo():
         from app.services.conflict_service import resolve, simulate_options
         from app.services.planning_service import detect_conflicts
         from app.api.actions import undo_batch
-        now = datetime.now(timezone.utc)
+        now = datetime.now(timezone.utc).replace(hour=15, minute=0, second=0, microsecond=0)  # after today's 09-12 window, so capacity is deterministic
         async with factory() as session:
             overloaded(session, now)
             await session.commit()
@@ -143,7 +143,7 @@ def test_extend_hours_option_writes_dated_override():
     async def body(factory):
         from app.services.conflict_service import resolve
         from app.services.planning_service import detect_conflicts
-        now = datetime.now(timezone.utc)
+        now = datetime.now(timezone.utc).replace(hour=15, minute=0, second=0, microsecond=0)  # after today's 09-12 window, so capacity is deterministic
         async with factory() as session:
             overloaded(session, now)
             await session.commit()
@@ -478,7 +478,7 @@ def test_today_free_minutes_ignore_done_work_and_survive_bad_recurrence():
 def test_duplicate_open_conflicts_for_one_deadline_are_reconciled():
     async def body(factory):
         from app.services.planning_service import detect_conflicts
-        now = datetime.now(timezone.utc)
+        now = datetime.now(timezone.utc).replace(hour=15, minute=0, second=0, microsecond=0)  # after today's 09-12 window, so capacity is deterministic
         async with factory() as session:
             deadline = overloaded(session, now)
             for _ in range(2):

@@ -1,0 +1,81 @@
+# Golden NLU set (PRD Appendix B): 50 utterances with the tool calls LifeOS must produce.
+# 25 simple, 15 multi-item, 10 ambiguous. Run against the configured model after every prompt change:
+#   .venv/bin/python scripts/run_golden.py          (needs an LLM key in .env)
+# Pass bar: >= 90% of cases with the exact intents and every required field.
+#
+# expect: a list of calls (order does not matter), or "clarify" for cases where the model must
+# not guess (no tool call, or confidence low/medium, or missing_fields listed).
+#   tool:     tool name
+#   required: arguments that must be present and non-null
+#   match:    arguments that must equal these values
+#   ref:      for update/complete/delete: the open task it must point to (by task_id or task_ref)
+
+context:
+  now_local: "Monday 2026-11-16 09:00 (UTC+0530)"
+  timezone: Asia/Kolkata
+  preferences: {work_hours: {start: "09:00", end: "18:00"}, quiet_hours: {start: "22:30", end: "07:30"}}
+  open_tasks:
+    - {id: 11111111-1111-4111-8111-111111111111, title: Finish DBMS report, deadline: Thu 2026-11-19 09:00}
+    - {id: 22222222-2222-4222-8222-222222222222, title: Study for ML quiz, deadline: Thu 2026-11-19 09:00}
+    - {id: 33333333-3333-4333-8333-333333333333, title: Buy groceries, deadline: Tue 2026-11-17 20:00}
+    - {id: 44444444-4444-4444-8444-444444444444, title: Call mom, deadline: Sun 2026-11-22 23:59}
+    - {id: 55555555-5555-4555-8555-555555555555, title: Dentist appointment prep, deadline: Wed 2026-11-18 16:00}
+  events_today:
+    - {title: DBMS lecture, start: "10:00", end: "13:00"}
+
+cases:
+  # ---- simple (25) ----
+  - {id: s01, group: simple, text: "Finish the ML notebook by Thursday, 2 hours", expect: [{tool: create_task, required: [title, deadline_iso, effort_min], match: {effort_min: 120}}]}
+  - {id: s02, group: simple, text: "Pay rent by the 5th", expect: [{tool: create_task, required: [title, deadline_iso], match: {category: finance}}]}
+  - {id: s03, group: simple, text: "Submit the internship form tomorrow", expect: [{tool: create_task, required: [title, deadline_iso]}]}
+  - {id: s04, group: simple, text: "Read chapter 4 of the OS book in 3 days, about an hour", expect: [{tool: create_task, required: [title, deadline_iso, effort_min], match: {effort_min: 60}}]}
+  - {id: s05, group: simple, text: "Important: email the professor about the project by Wednesday evening", expect: [{tool: create_task, required: [title, deadline_iso, importance]}]}
+  - {id: s06, group: simple, text: "Team sync every Monday at 10", expect: [{tool: create_event, required: [title, recurrence_rrule]}]}
+  - {id: s07, group: simple, text: "Dinner with Ravi on Friday at 8 pm", expect: [{tool: create_event, required: [title, start_iso]}]}
+  - {id: s08, group: simple, text: "Done with groceries", expect: [{tool: complete_task, ref: 33333333-3333-4333-8333-333333333333}]}
+  - {id: s09, group: simple, text: "I finished the DBMS report", expect: [{tool: complete_task, ref: 11111111-1111-4111-8111-111111111111}]}
+  - {id: s10, group: simple, text: "Push the report to Saturday", expect: [{tool: update_task, required: [deadline_iso], ref: 11111111-1111-4111-8111-111111111111}]}
+  - {id: s11, group: simple, text: "Make the ML quiz prep 3 hours", expect: [{tool: update_task, required: [effort_min], match: {effort_min: 180}, ref: 22222222-2222-4222-8222-222222222222}]}
+  - {id: s12, group: simple, text: "Cancel the dentist prep", expect: [{tool: delete_task, ref: 55555555-5555-4555-8555-555555555555}]}
+  - {id: s13, group: simple, text: "What's due this week?", expect: [{tool: query_schedule}]}
+  - {id: s14, group: simple, text: "What's next?", expect: [{tool: query_schedule}]}
+  - {id: s15, group: simple, text: "Am I free Thursday at 3 pm?", expect: [{tool: query_schedule}]}
+  - {id: s16, group: simple, text: "Plan my day", expect: [{tool: plan_day}]}
+  - {id: s17, group: simple, text: "Plan my day, I'm leaving at 5", expect: [{tool: plan_day, required: [not_after], match: {not_after: "17:00"}}]}
+  - {id: s18, group: simple, text: "Can I take a 6-hour job due Friday?", expect: [{tool: check_capacity, required: [title, effort_min], match: {effort_min: 360}}]}
+  - {id: s19, group: simple, text: "I never work after 9 pm", expect: [{tool: set_preference, match: {key: work_hours}}]}
+  - {id: s20, group: simple, text: "Don't remind me between 11 pm and 7 am", expect: [{tool: set_preference, match: {key: quiet_hours}}]}
+  - {id: s21, group: simple, text: "I focus best from 8 to 10 in the morning", expect: [{tool: set_preference, match: {key: focus_windows}}]}
+  - {id: s22, group: simple, text: "Call the bank today, it's quick", expect: [{tool: create_task, required: [title, deadline_iso]}]}
+  - {id: s23, group: simple, text: "Water the plants daily at 7 am", expect: [{tool: create_task, required: [title, recurrence_rrule]}]}
+  - {id: s24, group: simple, text: "Pin the DBMS report to the top", expect: [{tool: update_task, match: {pinned: true}, ref: 11111111-1111-4111-8111-111111111111}]}
+  - {id: s25, group: simple, text: "Tell me a joke", expect: []}
+
+  # ---- multi-item (15) ----
+  - {id: m01, group: multi, text: "Book dentist Tuesday 4 pm and buy groceries after", expect: [{tool: create_event, required: [title, start_iso]}, {tool: create_task, required: [title]}]}
+  - {id: m02, group: multi, text: "I need to finish the stats assignment by Friday, about 3 hours. Also call grandma on Sunday and pay the electricity bill before the 5th.", expect: [{tool: create_task, required: [title, deadline_iso, effort_min]}, {tool: create_task, required: [title, deadline_iso]}, {tool: create_task, required: [title, deadline_iso]}]}
+  - {id: m03, group: multi, text: "Done with groceries and called mom", expect: [{tool: complete_task, ref: 33333333-3333-4333-8333-333333333333}, {tool: complete_task, ref: 44444444-4444-4444-8444-444444444444}]}
+  - {id: m04, group: multi, text: "Gym Monday Wednesday Friday at 7 and yoga Saturday at 8", expect: [{tool: create_event, required: [title, recurrence_rrule]}, {tool: create_event, required: [title]}]}
+  - {id: m05, group: multi, text: "Move the report to Friday and what's next today?", expect: [{tool: update_task, required: [deadline_iso], ref: 11111111-1111-4111-8111-111111111111}, {tool: query_schedule}]}
+  - {id: m06, group: multi, text: "Write the cover letter by Wednesday, 1 hour, then apply to three jobs by Thursday, 2 hours", expect: [{tool: create_task, required: [title, deadline_iso, effort_min]}, {tool: create_task, required: [title, deadline_iso, effort_min]}]}
+  - {id: m07, group: multi, text: "Add a lab meeting Thursday 2 to 3 pm and prepare slides for it by Wednesday night", expect: [{tool: create_event, required: [title, start_iso]}, {tool: create_task, required: [title, deadline_iso]}]}
+  - {id: m08, group: multi, text: "I'm done with the ML quiz prep, push the DBMS report to Saturday", expect: [{tool: complete_task, ref: 22222222-2222-4222-8222-222222222222}, {tool: update_task, required: [deadline_iso], ref: 11111111-1111-4111-8111-111111111111}]}
+  - {id: m09, group: multi, text: "Renew my passport by end of month and book flights by the 25th", expect: [{tool: create_task, required: [title, deadline_iso]}, {tool: create_task, required: [title, deadline_iso]}]}
+  - {id: m10, group: multi, text: "I never work after 9 pm, and plan my day", expect: [{tool: set_preference, match: {key: work_hours}}, {tool: plan_day}]}
+  - {id: m11, group: multi, text: "Café shift Tuesday and Thursday 5 to 9 pm, and finish the essay draft by Wednesday, 2 hours", expect: [{tool: create_event, required: [title]}, {tool: create_task, required: [title, deadline_iso, effort_min]}]}
+  - {id: m12, group: multi, text: "Cancel the dentist prep and add a reminder to reschedule the appointment tomorrow", expect: [{tool: delete_task, ref: 55555555-5555-4555-8555-555555555555}, {tool: create_task, required: [title, deadline_iso]}]}
+  - {id: m13, group: multi, text: "Clean my room tonight, do laundry tomorrow, and buy a birthday gift for Asha by Saturday", expect: [{tool: create_task, required: [title, deadline_iso]}, {tool: create_task, required: [title, deadline_iso]}, {tool: create_task, required: [title, deadline_iso]}]}
+  - {id: m14, group: multi, text: "Can I fit a 4-hour project due Wednesday? Also what's due this week?", expect: [{tool: check_capacity, required: [title, effort_min], match: {effort_min: 240}}, {tool: query_schedule}]}
+  - {id: m15, group: multi, text: "Make groceries important and move call mom to Saturday", expect: [{tool: update_task, required: [importance], ref: 33333333-3333-4333-8333-333333333333}, {tool: update_task, required: [deadline_iso], ref: 44444444-4444-4444-8444-444444444444}]}
+
+  # ---- ambiguous (10): must ask, not guess ----
+  - {id: a01, group: ambiguous, text: "Finish it by Friday", expect: clarify}
+  - {id: a02, group: ambiguous, text: "Move that thing to later", expect: clarify}
+  - {id: a03, group: ambiguous, text: "Delete the task", expect: clarify}
+  - {id: a04, group: ambiguous, text: "Remind me about the thing", expect: clarify}
+  - {id: a05, group: ambiguous, text: "Add a meeting", expect: clarify}
+  - {id: a06, group: ambiguous, text: "Do the study task soon", expect: clarify}
+  - {id: a07, group: ambiguous, text: "Change the deadline", expect: clarify}
+  - {id: a08, group: ambiguous, text: "Mark it done", expect: clarify}
+  - {id: a09, group: ambiguous, text: "Schedule something with Priya", expect: clarify}
+  - {id: a10, group: ambiguous, text: "Make it longer", expect: clarify}

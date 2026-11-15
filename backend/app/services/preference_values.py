@@ -35,6 +35,12 @@ def validate_preference(key, value):
             if not isinstance(day, str) or len(day) != 10 or date.fromisoformat(day).isoformat() != day:
                 raise ValueError('Dates must use YYYY-MM-DD')
             validate_preference('work_hours', hours)
+    elif key == 'onboarding':
+        # First-run flow (PRD 5.1): when it finished and the answer to "When do you focus best?".
+        if type(value['completed']) is not bool:
+            raise ValueError('completed must be true or false')
+        if value.get('focus_period') not in (None, 'morning', 'afternoon', 'evening', 'night'):
+            raise ValueError('focus_period must be morning, afternoon, evening or night')
     elif key == 'demo_data':
         raise ValueError('Demo metadata is set only by the seed script')
     else:

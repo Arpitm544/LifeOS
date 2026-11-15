@@ -201,6 +201,17 @@ class Suggestion(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
 
 
+class GoogleConnection(Base):
+    """A user's link to Google Calendar. The refresh token is stored encrypted (see services/google_calendar.py)."""
+    __tablename__ = 'google_connections'
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[str] = mapped_column(ClerkUserId(), unique=True, index=True)
+    refresh_token_enc: Mapped[str] = mapped_column(Text)
+    connected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    last_synced_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[Optional[str]] = mapped_column(String(200))
+
+
 class WorkerStatus(Base):
     """Worker liveness, not tenant data: written only by the administrative worker."""
     __tablename__ = 'worker_status'

@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      e2e_api_url:
+        description: "Run the Playwright workflows against this API (demo auth enabled, disposable data)"
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: backend } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12", cache: pip, cache-dependency-path: backend/pyproject.toml }
+      - run: python -m pip install -e '.[test]'
+      - name: Unit and integration tests (SQLite, recorded LLM)
+        run: python -m pytest -q
+      - name: Seed script dry run
+        run: python seed_demo.py --user-id user_ci_demo --dry-run > /dev/null
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: frontend } }
+    env:
+      NEXT_TELEMETRY_DISABLED: "1"
+      NEXT_PUBLIC_API_URL: http://127.0.0.1:8000
+      # Build-only placeholder; real keys live in the hosting environment.
+      NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.CLERK_PUBLISHABLE_KEY || 'pk_test_Y2kuY2xlcmsuYWNjb3VudHMuZGV2JA' }}
+      CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY || 'sk_test_ci_placeholder' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "22", cache: npm, cache-dependency-path: frontend/package-lock.json }
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+      - run: npm run typecheck
+
+  e2e:
+    if: github.event_name == 'workflow_dispatch' && inputs.e2e_api_url != ''
+    needs: [backend, frontend]
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: e2e } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - run: npm install && npx playwright install --with-deps chromium
+      - name: API workflows
+        run: npx playwright test tests/workflows.spec.ts
+        env:
+          CI: "1"
+          E2E_API_URL: ${{ inputs.e2e_api_url }}

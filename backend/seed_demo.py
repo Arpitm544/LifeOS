@@ -41,6 +41,7 @@ def build_demo(user_id: str, anchor: date, tz_name: str = "Asia/Kolkata") -> dic
         "work_hours": {"start": "09:00", "end": "18:00"},
         "quiet_hours": {"start": "22:30", "end": "07:30"},
         "focus_windows": {"windows": [["08:00", "10:00"]]},
+        "onboarding": {"completed": True, "focus_period": "morning"},
         "demo_data": {"label": "Priya — synthetic demo history", "version": MARKER},
     }
     for key, value in settings.items():

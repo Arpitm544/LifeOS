@@ -8,6 +8,7 @@ import { useWorkspace } from "@/components/providers/workspace-provider";
 import { ConflictSheet } from "@/components/today/conflict-sheet";
 import { Notifications } from "@/components/today/notifications";
 import { Nudges } from "@/components/today/nudges";
+import { WeekView } from "@/components/today/week-view";
 import { useVoiceOutput } from "@/hooks/use-voice-output";
 import { briefPath, type Brief } from "@/lib/brief";
 import { readLanguageSetting, speechLocale } from "@/lib/language";
@@ -31,6 +32,9 @@ export default function TodayPage() {
   const [brief, setBrief] = useState<Brief>();
   const [voiceError, setVoiceError] = useState("");
   const voice = useVoiceOutput(setVoiceError);
+  const [view, setView] = useState<"day" | "week">("day");
+  const [clock, setClock] = useState(() => Date.now());
+  useEffect(() => { const timer = window.setInterval(() => setClock(Date.now()), 60_000); return () => window.clearInterval(timer); }, []);
 
   const latestLoad = useRef(0);
   const load = useCallback(async () => {
@@ -44,6 +48,26 @@ export default function TodayPage() {
     await briefing;
   }, [api, name.first]);
   useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    // Quick add, notification actions and the Week view announce changes; keep Today current (PRD 6, F3.5).
+    const refresh = () => { load(); };
+    window.addEventListener("lifeos:changed", refresh);
+    const poll = window.setInterval(() => { if (document.visibilityState === "visible") load(); }, 60_000);
+    return () => { window.removeEventListener("lifeos:changed", refresh); window.clearInterval(poll); };
+  }, [load]);
+  // Deep links: /today?replan=1 runs the planner once; /conflict/:id lands here with ?conflict=<id>.
+  const linked = useRef(false);
+  useEffect(() => {
+    if (linked.current || !today) return;
+    linked.current = true;
+    const params = new URLSearchParams(window.location.search);
+    const conflictId = params.get("conflict");
+    if (conflictId) { const match = today.conflicts.find(c => c.id === conflictId); if (match) setConflict(match); }
+    if (params.get("view") === "week") setView("week");
+    if (params.get("replan") === "1") void plan();
+    if (params.toString()) window.history.replaceState(null, "", "/today");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [today]);
 
   async function plan() {
     setPlanning(true); setPlanNote("");
@@ -69,6 +93,10 @@ export default function TodayPage() {
   ].sort((a, b) => Date.parse(a.start_at) - Date.parse(b.start_at)) : [];
   const due = today?.due_tasks ?? [];
   const planned = today?.plan_blocks.filter(b => b.status === "planned").length ?? 0;
+  const nowBlock = today?.plan_blocks.find(b => b.status === "planned" && Date.parse(b.start_at) <= clock && Date.parse(b.end_at) > clock);
+  const nextBlock = today?.plan_blocks.find(b => b.status === "planned" && Date.parse(b.start_at) > clock);
+  const nextEvent = today?.events.find(e => Date.parse(e.start_at) > clock);
+  const upcoming = nextEvent && (!nextBlock || Date.parse(nextEvent.start_at) < Date.parse(nextBlock.start_at)) ? { title: nextEvent.title, start_at: nextEvent.start_at, event: true } : nextBlock ? { title: nextBlock.title ?? "Task", start_at: nextBlock.start_at, event: false } : null;
   const summary = today ? `${due.length ? `${due.length} task${due.length === 1 ? "" : "s"} due` : "Nothing due"} today. You have ${formatHours(today.free_min_left)} of open time left.` : "";
 
   return <>
@@ -83,7 +111,11 @@ export default function TodayPage() {
       {planNote ? <small role="status">{planNote}</small> : <small>Plans the next 7 days around your events, routines and working hours.</small>}</div><Orbit /></section>
     {brief ? <Nudges brief={brief} onChanged={load} onOpenConflict={id => { const match = today?.conflicts.find(c => c.id === id); if (match) setConflict(match); }} /> : null}
     {error ? <div className="error-message with-action" role="alert"><span>{error}</span><button className="text-button" onClick={load}>Try again</button></div> : null}
-    <div className="two-columns today-columns"><section className="panel agenda"><div className="section-heading"><div><h2>Your schedule</h2><p>Events and focus blocks for today, in {tz}.</p></div><Link href="/tasks" className="text-button">All tasks <span aria-hidden="true">→</span></Link></div>
+    <section className="panel now-next" aria-label="Now and next"><div><p className="eyebrow muted">Now</p><h2>{nowBlock ? nowBlock.title ?? "Focus block" : "Free time"}</h2><p className="muted">{nowBlock ? `Until ${formatClock(nowBlock.end_at, tz)}` : today ? `${formatHours(today.free_min_left ?? 0)} of open time left today` : "…"}</p></div>
+      <div><p className="eyebrow muted">Next</p><h2>{upcoming ? upcoming.title : "Nothing else planned"}</h2><p className="muted">{upcoming ? `${upcoming.event ? "Event" : "Focus block"} at ${formatClock(upcoming.start_at, tz)}` : "Plan your day to fill open time."}</p></div>
+      <div className="view-toggle" role="group" aria-label="Schedule view"><button type="button" className={`filter-tab ${view === "day" ? "selected" : ""}`} aria-pressed={view === "day"} onClick={() => setView("day")}>Day</button><button type="button" className={`filter-tab ${view === "week" ? "selected" : ""}`} aria-pressed={view === "week"} onClick={() => setView("week")}>Week</button></div></section>
+    {view === "week" && today ? <section className="panel week-panel"><div className="section-heading"><div><h2>Your week</h2><p>Planned vs free working time per day, in {tz}. Red means the day cannot hold what is due.</p></div></div><WeekView start={String(today.date)} timezone={tz} onChanged={load} /></section> : null}
+    <div className="two-columns today-columns" hidden={view === "week"}><section className="panel agenda"><div className="section-heading"><div><h2>Your schedule</h2><p>Events and focus blocks for today, in {tz}.</p></div><Link href="/tasks" className="text-button">All tasks <span aria-hidden="true">→</span></Link></div>
       {!today && !error ? <p className="muted" role="status">Loading…</p> : items.length ? <ol className="timeline">{items.map(item => <li key={`${item.kind}-${item.id}`} className={`timeline-item ${item.kind} ${today?.next?.id === item.id ? "next" : ""} ${item.status && item.status !== "planned" ? item.status : ""}`}>
         <span className="timeline-time">{formatClock(item.start_at, tz)}<small>{formatClock(item.end_at, tz)}</small></span>
         <div><p className="task-title">{item.title}</p><p className="task-meta">{item.kind === "event" ? `Event${item.location ? ` · ${item.location}` : ""}` : today?.next?.id === item.id ? "Next focus block" : item.status === "planned" ? "Focus block" : item.status}</p></div>

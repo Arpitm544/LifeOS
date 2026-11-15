@@ -32,16 +32,30 @@ def allowed_endpoint(endpoint: str, allowed_hosts: list[str]) -> bool:
     return any(host == allowed or host.endswith('.' + allowed) for allowed in allowed_hosts)
 
 
-def notification_payload(reminder, *, summary_count: int = 0) -> dict:
-    """Payload the service worker shows, with Done / Snooze actions."""
+def notification_payload(reminder, *, summary_count: int = 0, settings=None, api_url: str = '') -> dict:
+    """Payload the service worker shows, with Done / Snooze actions.
+
+    With settings, the payload carries a signed action token so the buttons work
+    from the notification without opening the app (PRD F3.2).
+    """
+    from .push_tokens import sign_action_token
     body = reminder.message or 'You have a LifeOS reminder.'
     if summary_count > 1:
         body = f'{summary_count} reminders: {body}'
     url = f'/task/{reminder.item_id}' if reminder.item_type == 'task' else '/today'
     actions = [{'action': 'done', 'title': 'Done'}, {'action': 'snooze_15', 'title': 'Snooze 15 min'},
                {'action': 'snooze_60', 'title': 'Snooze 1 h'}] if reminder.item_type == 'task' else []
-    return {'title': 'LifeOS', 'body': body, 'reminder_id': str(reminder.id), 'kind': reminder.kind,
-            'url': url, 'actions': actions}
+    payload = {'title': 'LifeOS', 'body': body, 'reminder_id': str(reminder.id), 'kind': reminder.kind,
+               'url': url, 'actions': actions}
+    if actions and settings is not None:
+        token = sign_action_token(settings, reminder_id=str(reminder.id), user_id=str(reminder.user_id))
+        if token:
+            payload['action_token'] = token
+            base = api_url or getattr(settings, 'public_api_url', '') or 'http://127.0.0.1:8000'
+            payload['action_url'] = f"{base.rstrip('/')}/api/push-actions/{reminder.id}"
+        else:
+            payload['actions'] = []  # no secret configured: the buttons could not act
+    return payload
 
 
 def _send_one(subscription, payload: dict, settings) -> int:

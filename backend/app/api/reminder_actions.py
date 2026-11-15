@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import AwareDatetime, BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -136,3 +136,35 @@ async def reschedule(reminder_id: UUID, request: RescheduleRequest, session: Asy
     return {"id": str(reminder.id), "status": reminder.status, "fire_at": reminder.fire_at,
             "plan_block": {"id": str(block.id), "start_at": block.start_at, "end_at": block.end_at},
             "action_id": str(log.id)}
+
+
+push_router = APIRouter(prefix="/api/push-actions", tags=["reminders"])
+
+
+class PushActionRequest(BaseModel):
+    action: str
+
+
+@push_router.post("/{reminder_id}")
+async def push_action(reminder_id: UUID, request: PushActionRequest,
+                      x_push_token: str | None = Header(default=None)) -> dict:
+    """Done / Snooze tapped on a push notification (PRD F3.2).
+
+    The service worker has no Clerk session, so it sends the signed token from the
+    push payload instead. The token is bound to this reminder and its owner.
+    """
+    from ..config import get_settings
+    from ..db import user_session
+    from ..services.push_tokens import ALLOWED_ACTIONS, verify_action_token
+    if request.action not in ALLOWED_ACTIONS:
+        raise HTTPException(status_code=422, detail="Unsupported notification action")
+    user_id = verify_action_token(get_settings(), x_push_token or '', reminder_id=str(reminder_id))
+    if user_id is None:
+        raise HTTPException(status_code=401, detail="Notification action expired; open LifeOS to continue")
+    async with user_session(user_id) as session:
+        reminder = await apply_reminder_action(session, user_id=user_id, reminder_id=reminder_id, action=request.action)
+        if reminder is None:
+            raise HTTPException(status_code=404, detail="Reminder not found")
+        await session.commit()
+        return {"id": str(reminder.id), "status": reminder.status, "action_taken": reminder.action_taken,
+                "fire_at": reminder.fire_at}

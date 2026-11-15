@@ -51,7 +51,7 @@ class Claim:
     subscriptions: list[PushSubscription]
 
 
-async def claim_due(session, *, now: datetime, batch_size: int = 100) -> tuple[list[Claim], dict]:
+async def claim_due(session, *, now: datetime, batch_size: int = 100, settings=None) -> tuple[list[Claim], dict]:
     """Short transaction: mark due reminders 'sending' (one push per user)."""
     recovered = await session.execute(update(Reminder).where(Reminder.status == 'sending',
         Reminder.sent_at < now - STUCK_SENDING).values(status='pending', sent_at=None))
@@ -75,7 +75,7 @@ async def claim_due(session, *, now: datetime, batch_size: int = 100) -> tuple[l
         subscriptions = list((await session.execute(select(PushSubscription).where(
             PushSubscription.user_id == user_id))).scalars())
         claims.append(Claim(user_id, [item.id for item in items],
-                            notification_payload(items[-1], summary_count=len(items)), subscriptions))
+                            notification_payload(items[-1], summary_count=len(items), settings=settings), subscriptions))
     await session.flush()
     return claims, {'deferred': deferred, 'missed': missed.rowcount or 0, 'recovered': recovered.rowcount or 0}
 
@@ -83,7 +83,7 @@ async def claim_due(session, *, now: datetime, batch_size: int = 100) -> tuple[l
 async def deliver_due(factory, settings, *, now: datetime, batch_size: int = 100) -> dict:
     """Claim, send with no transaction open, then record the outcome."""
     async with factory() as session, session.begin():
-        claims, report = await claim_due(session, now=now, batch_size=batch_size)
+        claims, report = await claim_due(session, now=now, batch_size=batch_size, settings=settings)
     outcomes = []
     for claim in claims:
         result = await send_to_subscriptions(claim.subscriptions, claim.payload, settings)
@@ -194,8 +194,28 @@ async def retention(factory, *, now: datetime) -> dict:
             'idempotency_records': keys.rowcount or 0}
 
 
+async def google_sync_all(factory, *, now: datetime) -> dict:
+    """Refresh every connected Google Calendar. One transaction per user, so one revoked link blocks nobody."""
+    from .models import GoogleConnection
+    from .services import google_calendar as gcal
+    if not gcal.configured():
+        return {'users': 0, 'done': 0, 'failed': 0}
+    async with factory() as session:
+        users = list((await session.execute(select(GoogleConnection.user_id))).scalars())
+
+    async def run(session, user_id):
+        async with gcal.new_client() as http:
+            try:
+                await gcal.sync_user(session, user_id, http, now=now)
+            except gcal.Revoked:
+                return False  # last_error is saved on the connection; the user sees "Reconnect"
+        return True
+    return await _per_user(factory, 'google_sync', users, run)
+
+
 JOBS = {'rescore': (timedelta(hours=1), rescore_all), 'daily_plan': (timedelta(minutes=15), daily_plans),
-        'retention': (timedelta(hours=24), retention)}
+        'retention': (timedelta(hours=24), retention),
+        'google_sync': (timedelta(minutes=get_settings().google_sync_minutes), google_sync_all)}
 
 
 async def heartbeat(session, name: str, *, now: datetime, jobs: dict) -> None:
