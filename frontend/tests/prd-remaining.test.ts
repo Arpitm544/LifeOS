@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { sparklinePoints } from "../src/lib/sparkline.ts";
+import { adherenceCaption, sparklinePoints } from "../src/lib/sparkline.ts";
 import { blockersOf, dependencyChoices, describePreference, preferencesFromRows, type DependencyLink } from "../src/lib/task-utils.ts";
 import { placeAfter, shiftByMinutes } from "../src/lib/week.ts";
 import type { PreferenceRow, Task } from "../src/lib/types.ts";
@@ -77,4 +77,10 @@ test("an inferred proposal reads like the preference it would change", () => {
 test("a pending proposal never changes the settings the planner form shows", () => {
   const rows = [row("reminder_lead", { minutes: 60 }), row("inferred.reminder_lead", { minutes: 45 }, { source: "inferred", status: "suggested", confidence: 0.8 })];
   assert.equal(preferencesFromRows(rows).reminderLead, 60);
+});
+
+test("plan adherence explains that only ended blocks count", () => {
+  assert.equal(adherenceCaption(0), "Shows once a planned block has ended");
+  assert.equal(adherenceCaption(1), "Of 1 planned block that ended in the last 14 days");
+  assert.equal(adherenceCaption(6), "Of 6 planned blocks that ended in the last 14 days");
 });
