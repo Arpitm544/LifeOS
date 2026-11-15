@@ -54,10 +54,18 @@ export function errorMessage(status: number, body: unknown): string {
 export type GetToken = () => Promise<string | null>;
 export type RequestOptions = { method?: "GET" | "POST" | "PATCH" | "PUT" | "DELETE"; body?: unknown; headers?: Record<string, string>; signal?: AbortSignal };
 
+export const signedOutMessage = "You are signed out. Sign in again to continue.";
+
+/** Whether the workspace can load yet: Clerk must finish loading before it can hand out a session token. */
+export function workspaceLoadStep(auth: { isLoaded: boolean; isSignedIn?: boolean | null }): "wait" | "load" | "signed-out" {
+  if (!auth.isLoaded) return "wait";
+  return auth.isSignedIn ? "load" : "signed-out";
+}
+
 export function createApi(getToken: GetToken, baseUrl = API_URL, fetcher: typeof fetch = (...args) => fetch(...args)) {
   return async function request<T = unknown>(path: string, options: RequestOptions = {}): Promise<T> {
     const token = await getToken();
-    if (!token) throw new ApiError("You are signed out. Sign in again to continue.", 401);
+    if (!token) throw new ApiError(signedOutMessage, 401);
     const headers: Record<string, string> = { Accept: "application/json", Authorization: `Bearer ${token}`, ...options.headers };
     if (options.body !== undefined) headers["Content-Type"] = "application/json";
     let response: Response;
