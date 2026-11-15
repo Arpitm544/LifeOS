@@ -132,9 +132,45 @@ def llm_context(ctx: ChatContext, text: str, events: list[Event], language: Opti
     }
 
 
+SPOKEN_MAX_WORDS = 25
+
+
+def spoken_version(reply: str) -> str:
+    """The short spoken reply (PRD 4.7 / F5): at most 25 words, no lists, symbols or ISO dates.
+
+    Built by code from the full reply so it never says a number the reply does not.
+    """
+    text = re.sub(r'\d{4}-\d{2}-\d{2}T[\d:.+\-Z]+', '', reply or '')      # raw ISO timestamps
+    text = re.sub(r'^\s*(?:[-*•]|\d+[.)])\s+', '', text, flags=re.M)          # list markers
+    text = re.sub(r'[*_`#>|~\[\]{}<>]', '', text).replace('→', ' to ').replace('&', ' and ')
+    text = re.sub(r'\s+', ' ', text).strip()
+    if not text:
+        return 'Okay.'
+    sentences = re.split(r'(?<=[.!?])\s+', text)
+    spoken, count = [], 0
+    for sentence in sentences:
+        words = sentence.split()
+        if count + len(words) > SPOKEN_MAX_WORDS:
+            if not spoken:  # one long sentence: cut on a word boundary
+                spoken.append(' '.join(words[:SPOKEN_MAX_WORDS]).rstrip(',;:') + '.')
+            break
+        spoken.append(sentence)
+        count += len(words)
+    return ' '.join(spoken)
+
+
 async def handle_chat(session, *, user_id, text: str, client_tz: str,
                       llm: Optional[LLMClient] = None, now: Optional[datetime] = None,
                       language: Optional[str] = None) -> dict:
+    result = await _handle_chat(session, user_id=user_id, text=text, client_tz=client_tz, llm=llm, now=now,
+                                language=language)
+    result.setdefault('spoken_reply', spoken_version(result.get('reply', '')))
+    return result
+
+
+async def _handle_chat(session, *, user_id, text: str, client_tz: str,
+                       llm: Optional[LLMClient] = None, now: Optional[datetime] = None,
+                       language: Optional[str] = None) -> dict:
     started = time.monotonic()
     now = _utc(now or datetime.now(timezone.utc))
     ctx = await build_context(session, user_id, text, client_tz, now)

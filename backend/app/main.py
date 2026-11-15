@@ -11,7 +11,7 @@ from .api.actions import router as actions_router
 from .api.plan import router as plan_router
 from .api.capacity import router as capacity_router
 from .api.reminders import router as reminders_router
-from .api.reminder_actions import router as reminder_actions_router
+from .api.reminder_actions import push_router as push_actions_router, router as reminder_actions_router
 from .api.insights import router as insights_router
 from .api.activity import router as activity_router
 from .api.events import router as events_router
@@ -31,6 +31,7 @@ from .api.task_batches import router as task_batches_router
 from .api.push import router as push_router
 from .api.account import router as account_router
 from .api.imports import router as imports_router
+from .api.google import router as google_router
 from .api.brief import router as brief_router
 from .config import get_settings
 from fastapi.middleware.cors import CORSMiddleware
@@ -44,6 +45,7 @@ app.include_router(plan_router)
 app.include_router(capacity_router)
 app.include_router(reminders_router)
 app.include_router(reminder_actions_router)
+app.include_router(push_actions_router)
 app.include_router(insights_router)
 app.include_router(activity_router)
 app.include_router(events_router)
@@ -54,13 +56,14 @@ app.include_router(conflicts_router)
 app.include_router(push_router)
 app.include_router(account_router)
 app.include_router(imports_router)
+app.include_router(google_router)
 app.include_router(brief_router)
 # Added last so it wraps everything: browser preflight requests are answered here,
 # before authentication and rate limiting, and handled error responses (401, 429,
 # HTTPException) keep CORS headers. An unhandled 500 does not.
 app.add_middleware(CORSMiddleware, allow_origins=get_settings().cors_origin_list,
                    allow_methods=['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
-                   allow_headers=['Authorization', 'Content-Type', 'Idempotency-Key'],
+                   allow_headers=['Authorization', 'Content-Type', 'Idempotency-Key', 'X-Push-Token'],
                    allow_credentials=False, max_age=600)
 
 @app.get("/health")

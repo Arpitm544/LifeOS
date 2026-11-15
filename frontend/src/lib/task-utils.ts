@@ -123,6 +123,7 @@ export function preferenceUpdates(before: Preferences, after: Preferences) {
 const preferenceLabels: Record<string, string> = {
   timezone: "Timezone", work_hours: "Working hours", quiet_hours: "Quiet hours", focus_windows: "Focus windows",
   reminder_lead: "Reminder lead", estimate_padding: "Estimate padding", work_hours_overrides: "Extended working days",
+  onboarding: "First-run setup",
 };
 
 /** Human label and value for one preference row ("What LifeOS knows about you"). */
@@ -134,6 +135,7 @@ export function describePreference(row: Pick<PreferenceRow, "key" | "value">): {
   if (row.key === "focus_windows" && Array.isArray(v.windows)) return { label, value: (v.windows as string[][]).map(([s, e]) => `${s}–${e}`).join(", ") || "None" };
   if (row.key === "reminder_lead") return { label, value: `${v.minutes} min before the latest start` };
   if (row.key === "estimate_padding") return { label, value: v.enabled ? "On" : "Off" };
+  if (row.key === "onboarding") return { label, value: v.completed ? `Done${typeof v.focus_period === "string" ? ` · focuses best in the ${v.focus_period}` : ""}` : "Not finished" };
   if (row.key === "work_hours_overrides" && v.dates && typeof v.dates === "object") {
     const entries = Object.entries(v.dates as Record<string, { start: string; end: string }>);
     return { label, value: entries.length ? entries.map(([day, h]) => `${day} ${h.start}–${h.end}`).join(", ") : "None" };
@@ -158,4 +160,20 @@ export function describeRule(rule: string) {
     return names.join(", ");
   }
   return String(parts.FREQ ?? rule).toLowerCase().replace(/^\w/, c => c.toUpperCase());
+}
+
+export type FocusPeriod = "morning" | "afternoon" | "evening" | "night";
+/** Seed focus window for the onboarding answer "When do you focus best?" (PRD 5.1), until real data exists. */
+export const focusPeriods: Record<FocusPeriod, { label: string; window: [string, string] }> = {
+  morning: { label: "Morning", window: ["08:00", "10:00"] },
+  afternoon: { label: "Afternoon", window: ["13:00", "15:00"] },
+  evening: { label: "Evening", window: ["17:00", "19:00"] },
+  night: { label: "Night", window: ["20:00", "22:00"] },
+};
+
+/** Whether first-run onboarding should open: never finished, and the user has not set their own working hours. */
+export function needsOnboarding(rows: Pick<PreferenceRow, "key" | "source" | "value">[]) {
+  const done = rows.find(row => row.key === "onboarding");
+  if (done) return done.value?.completed !== true;
+  return !rows.some(row => row.key === "work_hours" && row.source === "stated");
 }

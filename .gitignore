@@ -6,3 +6,4 @@ frontend/tsconfig.tsbuildinfo
 !.env.example
 .DS_Store
 .clerk/
+!.env.demo.example

@@ -32,7 +32,8 @@ export function ChatWorkspace() {
   const voiceInput = useVoiceInput((value, spoken) => { setText(value); heard.current = spoken; input.current?.focus(); });
   const voiceOutput = useVoiceOutput(setVoiceError);
 
-  useEffect(() => { setLanguage(readLanguageSetting()); }, []);
+  const [welcome, setWelcome] = useState(false);
+  useEffect(() => { setLanguage(readLanguageSetting()); setWelcome(new URLSearchParams(window.location.search).get("welcome") === "1"); }, []);
   useEffect(() => {
     const prompt = new URLSearchParams(window.location.search).get("prompt");
     if (prompt) { setText(prompt.slice(0, 1000)); input.current?.focus(); }
@@ -71,7 +72,7 @@ export function ChatWorkspace() {
   const last = messages.at(-1);
   return <div className="two-columns chat-columns"><div className="chat-main">
     <section className="panel conversation" aria-label="Chat conversation">
-      {messages.length === 0 ? <div className="chat-empty"><p className="eyebrow blue">LifeOS</p><h2>Hi {name.first}. What’s on your mind?</h2><p className="muted">Add tasks and events, ask what’s next, check if something fits, or set your working hours. Every change can be undone for a few seconds.</p></div> : null}
+      {messages.length === 0 ? <div className="chat-empty"><p className="eyebrow blue">LifeOS</p><h2>{welcome ? "Tell me everything on your plate this week." : `Hi ${name.first}. What’s on your mind?`}</h2>{welcome ? <p className="muted">Ramble, I’ll sort it: deadlines, rough effort, shifts, anything. Hold the mic or type.</p> : null}<p className="muted">Add tasks and events, ask what’s next, check if something fits, or set your working hours. Every change can be undone for a few seconds.</p></div> : null}
       <div className="message-log" role="log" aria-live="polite" aria-relevant="additions">{messages.map(message => {
         const response = message.response;
         const choice = response?.confirmation ? { label: response.confirmation.prompt, options: response.confirmation.options } : response?.clarification ? { label: response.clarification.question, options: response.clarification.options } : null;
@@ -86,7 +87,7 @@ export function ChatWorkspace() {
             {response.fallback ? <p className="muted fallback-note">The assistant is unavailable right now, so this was handled by quick add.</p> : null}
             {response.actions.map((action, index) => <ActionCard key={action.action_id ?? `${message.id}-${index}`} action={action} />)}
             {response.steps?.length ? <AgentSteps steps={response.steps} open={isLast} /> : null}
-            <button className="text-button voice-reply" type="button" onClick={() => { setVoiceError(""); if (speaking && (voiceOutput.loading || voiceOutput.playing || voiceOutput.url)) { voiceOutput.stop(); setSpeakingId(null); } else { setSpeakingId(message.id); void voiceOutput.read(response.reply.slice(0, 500), speechLocale(message.language ?? scriptLanguage(response.reply))); } }}>{speaking && voiceOutput.playing ? <VolumeX size={16} aria-hidden="true" /> : <Volume2 size={16} aria-hidden="true" />} {speaking && voiceOutput.loading ? "Preparing audio… (click to cancel)" : speaking && voiceOutput.playing ? "Stop reading" : response.reply.length > 500 ? "Listen to first 500 characters" : "Listen"}</button>
+            <button className="text-button voice-reply" type="button" onClick={() => { setVoiceError(""); if (speaking && (voiceOutput.loading || voiceOutput.playing || voiceOutput.url)) { voiceOutput.stop(); setSpeakingId(null); } else { setSpeakingId(message.id); void voiceOutput.read(response.spoken_reply || response.reply.slice(0, 500), speechLocale(message.language ?? scriptLanguage(response.reply))); } }}>{speaking && voiceOutput.playing ? <VolumeX size={16} aria-hidden="true" /> : <Volume2 size={16} aria-hidden="true" />} {speaking && voiceOutput.loading ? "Preparing audio… (click to cancel)" : speaking && voiceOutput.playing ? "Stop reading" : !response.spoken_reply && response.reply.length > 500 ? "Listen to first 500 characters" : "Listen"}</button>
             {response.conflicts.length ? <div className="conflict-banner compact" role="alert"><b>Heads up:</b> {response.conflicts.map(c => `${formatHours(c.shortfall_min)} short before ${formatDeadline(c.deadline_at, preferences.timezone)}`).join("; ")}.<Link className="text-button" href="/today">See options <span aria-hidden="true">→</span></Link></div> : null}
             {choice?.options.length ? <div className="chip-row" role="group" aria-label={choice.label || "Choose an answer"}>{choice.options.map(option => <button key={option} className="chip" disabled={!isLast || sending} onClick={() => send(option)}>{option}</button>)}</div> : null}
           </> : null}

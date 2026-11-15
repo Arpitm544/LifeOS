@@ -72,7 +72,19 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         from .config import get_settings
         settings = get_settings()
         try:
-            identity = str(await current_user_id(request.headers.get('authorization'), request.headers.get('x-demo-user-id')))
+            if request.url.path.startswith('/api/push-actions/'):
+                # Notification buttons authenticate with a signed token bound to one reminder.
+                from .services.push_tokens import verify_action_token
+                reminder_id = request.url.path.rsplit('/', 1)[-1]
+                user = verify_action_token(settings, request.headers.get('x-push-token') or '', reminder_id=reminder_id)
+                if user is None:
+                    raise HTTPException(status_code=401, detail='Notification action expired; open LifeOS to continue')
+                identity = user
+            elif request.url.path == '/api/google/callback':
+                # Google's redirect carries no bearer token; the signed `state` authenticates it. Throttle by address.
+                identity = 'ip:' + (request.client.host if request.client else 'unknown')
+            else:
+                identity = str(await current_user_id(request.headers.get('authorization'), request.headers.get('x-demo-user-id')))
         except HTTPException as exc:
             return JSONResponse(status_code=exc.status_code, content={'code': 'authentication_failed', 'message': exc.detail})
         limits = [('api', settings.api_rate_limit)]

@@ -32,6 +32,15 @@ export default function TasksPage() {
   }, []);
 
   useEffect(() => { if (editing) dialog.current?.showModal(); }, [editing]);
+  // Deep link /task/:id (from a reminder notification) opens that task's editor.
+  const linked = useRef(false);
+  useEffect(() => {
+    if (linked.current) return;
+    const id = new URLSearchParams(window.location.search).get("task");
+    if (!id) { linked.current = true; return; }
+    const match = tasks.find(task => task.id === id);
+    if (match) { linked.current = true; setEditing(match); window.history.replaceState(null, "", "/tasks"); }
+  }, [tasks]);
   function close() { dialog.current?.close(); setEditing(undefined); setConfirmDelete(false); setDeleteError(""); }
   async function remove(task: Task) {
     setDeleteError("");

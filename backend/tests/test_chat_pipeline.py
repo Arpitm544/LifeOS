@@ -89,7 +89,7 @@ def test_brain_dump_creates_several_items_with_defaults_and_conflict_check():
         assert result['actions'][0]['task']['deadline_label'].startswith(friday.strftime('%a'))
         assert result['actions'][1]['task']['effort_est_min'] == 30  # social category default
         assert all(a['undo_until'] for a in result['actions'])
-        assert result['message_id'] and 'spoken_reply' not in result
+        assert result['message_id'] and result['spoken_reply'] == 'Added your tasks.'
         assert len((await session.execute(select(Event))).scalars().all()) == 1
         roles = [m.role for m in (await session.execute(select(Message).order_by(Message.created_at))).scalars()]
         assert roles == ['user', 'assistant']
