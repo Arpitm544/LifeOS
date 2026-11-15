@@ -28,3 +28,16 @@ export function shiftToDay(block: Pick<PlanBlock, "start_at" | "end_at">, from: 
   const shift = (value: string) => new Date(Date.parse(value) + days * 86_400_000).toISOString();
   return { start_at: shift(block.start_at), end_at: shift(block.end_at) };
 }
+
+/** Same day, shifted by whole minutes: the PATCH body for the Today timeline's earlier/later buttons. */
+export function shiftByMinutes(block: Pick<PlanBlock, "start_at" | "end_at">, minutes: number) {
+  const shift = (value: string) => new Date(Date.parse(value) + minutes * 60_000).toISOString();
+  return { start_at: shift(block.start_at), end_at: shift(block.end_at) };
+}
+
+/** Drop a block onto another timeline item: it starts when that item ends and keeps its length. */
+export function placeAfter(block: Pick<PlanBlock, "start_at" | "end_at">, target: { end_at: string }) {
+  const length = Date.parse(block.end_at) - Date.parse(block.start_at);
+  const start = Date.parse(target.end_at);
+  return { start_at: new Date(start).toISOString(), end_at: new Date(start + length).toISOString() };
+}

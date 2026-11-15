@@ -11,6 +11,7 @@ from ..db import get_session
 from ..models import ActionLog, Preference, Routine
 from ..schemas_preferences import PreferenceUpdate, RoutineCreate
 from ..services.domain_service import audit, snapshot, sync_all_reminders
+from ..services.preference_inference import PREFIX as INFERRED_PREFIX, accept_inferred, record_dismissal
 from ..services.recurrence import expand_routine
 from datetime import date, datetime, timezone
 from pydantic import BaseModel, AwareDatetime, Field
@@ -95,6 +96,12 @@ async def accept_preference(preference_id: UUID, session: AsyncSession = Depends
         Preference.user_id == user_id).with_for_update())).scalar_one_or_none()
     if row is None:
         raise HTTPException(status_code=404, detail='Preference not found')
+    if row.key.startswith(INFERRED_PREFIX):
+        # A learned proposal (F6): it replaces the preference it targets.
+        target, action = await accept_inferred(session, user_id, row)
+        await sync_all_reminders(session, user_id)
+        await session.commit()
+        return {'preference': snapshot(target), 'action_id': str(action.id)}
     before = snapshot(row)
     row.status = 'active'
     action = await audit(session, user_id, row, before, 'accept')
@@ -110,6 +117,7 @@ async def delete_preference(preference_id: UUID, confirmed: bool=False, session:
         Preference.user_id == user_id).with_for_update())).scalar_one_or_none()
     if row is None:
         raise HTTPException(status_code=404, detail="Preference not found")
+    record_dismissal(session, user_id, row)  # a deleted proposal is not offered again for a while
     session.add(ActionLog(user_id=user_id, entity='preferences', entity_id=row.id,
         action_type='delete', before=snapshot(row), after=None))
     await session.delete(row)

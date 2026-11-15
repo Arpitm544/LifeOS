@@ -2,8 +2,9 @@
 
 import Link from "next/link";
 import { CalendarPlus, CheckCircle2, Clock3, ListChecks, ShieldAlert, ShieldCheck, Target, Volume2, VolumeX } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type DragEvent } from "react";
 import { useWorkspace } from "@/components/providers/workspace-provider";
+import { EveningCheckin } from "@/components/today/checkin";
 import { ConflictSheet } from "@/components/today/conflict-sheet";
 import { Notifications } from "@/components/today/notifications";
 import { Nudges } from "@/components/today/nudges";
@@ -14,13 +15,14 @@ import { readLanguageSetting, speechLocale } from "@/lib/language";
 import { useDisplayName } from "@/hooks/use-display-name";
 import { readableError } from "@/lib/api";
 import { formatClock, formatDeadline, formatHours } from "@/lib/task-utils";
+import { placeAfter, shiftByMinutes } from "@/lib/week";
 import type { Conflict, Today } from "@/lib/types";
 import { Orbit } from "@/components/ui/orbit";
 
 type Item = { id: string; kind: "event" | "block"; title: string; start_at: string; end_at: string; status?: string; location?: string | null };
 
 export default function TodayPage() {
-  const { api, preferences, completeTask } = useWorkspace();
+  const { api, preferences, completeTask, notify } = useWorkspace();
   const name = useDisplayName();
   const [today, setToday] = useState<Today>();
   const [error, setError] = useState("");
@@ -33,6 +35,10 @@ export default function TodayPage() {
   const voice = useVoiceOutput(setVoiceError);
   const [view, setView] = useState<"day" | "week">("day");
   const [clock, setClock] = useState(() => Date.now());
+  // Drag to reschedule on the timeline (PRD 6): drop a block onto an item and it starts when that item ends.
+  const [moving, setMoving] = useState("");
+  const [over, setOver] = useState("");
+  const dragged = useRef<Item | null>(null);
   useEffect(() => { const timer = window.setInterval(() => setClock(Date.now()), 60_000); return () => window.clearInterval(timer); }, []);
 
   const latestLoad = useRef(0);
@@ -76,6 +82,23 @@ export default function TodayPage() {
       await load();
     } catch (e) { setPlanNote(readableError(e, "Could not plan your days.")); }
     finally { setPlanning(false); }
+  }
+
+  async function moveBlock(item: Item, body: { start_at: string; end_at: string }) {
+    if (moving) return;
+    setMoving(item.id); setError("");
+    try {
+      await api(`/api/plan-blocks/${item.id}`, { method: "PATCH", body });
+      notify(`Moved “${item.title}” to ${formatClock(body.start_at, tz)}.`);
+      await load();
+    } catch (e) { setError(readableError(e, "Could not move that block.")); }
+    finally { setMoving(""); }
+  }
+
+  function dropOn(event: DragEvent, target: Item) {
+    event.preventDefault(); setOver("");
+    const block = dragged.current; dragged.current = null;
+    if (block && block.id !== target.id) void moveBlock(block, placeAfter(block, target));
   }
 
   async function complete(id: string) {
@@ -132,17 +155,24 @@ export default function TodayPage() {
       {atRisk ? <button type="button" className="stat stat-link risk" onClick={() => setConflict(today.conflicts[0])}><span className="stat-label"><ShieldAlert size={15} aria-hidden="true" /> Capacity guard</span><span className="stat-value">{atRisk} at risk</span><span className="stat-note">See your options <span aria-hidden="true">→</span></span></button>
         : <div className="stat ok"><span className="stat-label"><ShieldCheck size={15} aria-hidden="true" /> Capacity guard</span><span className="stat-value">All fit</span><span className="stat-note">Every deadline fits your week</span></div>}
     </section> : !error ? <section className="stat-row" aria-busy="true" aria-label="Loading today in numbers">{[0, 1, 2, 3].map(i => <div key={i} className="stat"><span className="skeleton" style={{ width: "55%" }} /><span className="skeleton tall" style={{ width: "40%" }} /><span className="skeleton" style={{ width: "75%" }} /></div>)}</section> : null}
+    {today ? <EveningCheckin timezone={tz} /> : null}
     {brief ? <Nudges brief={brief} onChanged={load} onOpenConflict={id => { const match = today?.conflicts.find(c => c.id === id); if (match) setConflict(match); }} /> : null}
     {view === "week" && today ? <section className="panel week-panel"><div className="section-heading"><div><h2>Your week</h2><p>Planned vs free working time per day, in {tz}. Red means the day cannot hold what is due.</p></div>{viewToggle}</div><WeekView start={String(today.date)} timezone={tz} onChanged={load} /></section> : null}
     <div className="two-columns today-columns" hidden={view === "week"}><div className="main-stack">
-      <section className="panel agenda"><div className="section-heading"><div><h2>Your schedule</h2><p>Events and focus blocks for today, in {tz}.</p></div>{viewToggle}</div>
+      <section className="panel agenda"><div className="section-heading"><div><h2>Your schedule</h2><p>Events and focus blocks for today, in {tz}. Drag a block onto another item to start it right after.</p></div>{viewToggle}</div>
       {!today && !error ? <div className="timeline-skeleton" role="status" aria-label="Loading your schedule">{[0, 1, 2].map(i => <div key={i}><span className="skeleton" /><span className="skeleton block" /></div>)}</div> : items.length ? <ol className="timeline">{items.flatMap((item, index) => {
         const past = Date.parse(item.end_at) <= clock;
         const live = !past && Date.parse(item.start_at) <= clock;
-        const row = <li key={`${item.kind}-${item.id}`} className={`timeline-item ${item.kind} ${today?.next?.id === item.id ? "next" : ""} ${live ? "live" : ""} ${past ? "past" : ""} ${item.status && item.status !== "planned" ? item.status : ""}`}>
+        const movable = item.kind === "block" && item.status === "planned" && !past && !live;
+        const row = <li key={`${item.kind}-${item.id}`} className={`timeline-item ${item.kind} ${today?.next?.id === item.id ? "next" : ""} ${live ? "live" : ""} ${past ? "past" : ""} ${item.status && item.status !== "planned" ? item.status : ""} ${over === item.id ? "drop-target" : ""} ${moving === item.id ? "moving" : ""}`}
+          draggable={movable && !moving} onDragStart={movable ? event => { dragged.current = item; event.dataTransfer.setData("text/plain", item.title); event.dataTransfer.effectAllowed = "move"; } : undefined}
+          onDragEnd={() => { dragged.current = null; setOver(""); }}
+          onDragOver={event => { if (dragged.current && dragged.current.id !== item.id) { event.preventDefault(); setOver(item.id); } }}
+          onDragLeave={() => setOver(current => current === item.id ? "" : current)} onDrop={event => dropOn(event, item)}>
           <span className="timeline-time">{formatClock(item.start_at, tz)}<small>{formatClock(item.end_at, tz)}</small></span>
           <span className="timeline-dot" aria-hidden="true" />
-          <div className="timeline-body"><p className="task-title">{item.title}</p><p className="task-meta"><span className={`kind-chip ${item.kind}`}>{item.kind === "event" ? "Event" : "Focus"}</span>{item.kind === "event" ? item.location ?? null : live ? "In progress" : today?.next?.id === item.id ? "Up next" : item.status === "planned" ? null : item.status}</p></div>
+          <div className="timeline-body"><p className="task-title">{item.title}</p><p className="task-meta"><span className={`kind-chip ${item.kind}`}>{item.kind === "event" ? "Event" : "Focus"}</span>{item.kind === "event" ? item.location ?? null : live ? "In progress" : today?.next?.id === item.id ? "Up next" : item.status === "planned" ? null : item.status}
+            {movable ? <span className="timeline-nudge"><button type="button" className="text-button" disabled={!!moving} aria-label={`Move ${item.title} 30 minutes earlier`} onClick={() => moveBlock(item, shiftByMinutes(item, -30))}>−30m</button><button type="button" className="text-button" disabled={!!moving} aria-label={`Move ${item.title} 30 minutes later`} onClick={() => moveBlock(item, shiftByMinutes(item, 30))}>+30m</button></span> : null}</p></div>
         </li>;
         return index === markerAt ? [<li key="now" className="timeline-now" aria-label={`Now, ${formatClock(new Date(clock).toISOString(), tz)}`}><span>Now · {formatClock(new Date(clock).toISOString(), tz)}</span></li>, row] : [row];
       }).concat(markerAt === items.length ? [<li key="now" className="timeline-now" aria-label={`Now, ${formatClock(new Date(clock).toISOString(), tz)}`}><span>Now · {formatClock(new Date(clock).toISOString(), tz)}</span></li>] : [])}</ol> : today ? <div className="empty-state"><CalendarPlus size={32} aria-hidden="true" /><h3>Nothing scheduled yet.</h3><p>Plan your day to turn your tasks into focus blocks.</p><button className="button secondary" onClick={plan} disabled={planning}>Plan my day</button></div> : null}

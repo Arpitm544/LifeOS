@@ -16,5 +16,6 @@ class InsightsResponse(BaseModel):
     completion_rate: Optional[float] = None
     planned_blocks_14d: int = 0
     completion_chart: list[dict] = Field(default_factory=list)
+    adherence_chart: list[dict] = Field(default_factory=list)
     samples: int = 0
     suggestions: list[dict] = Field(default_factory=list)

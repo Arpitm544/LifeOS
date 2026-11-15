@@ -25,6 +25,14 @@ class DependenciesUpdate(BaseModel):
     depends_on: list[UUID] = Field(max_length=100)
 
 
+@router.get('/dependencies')
+async def list_dependencies(session: AsyncSession = Depends(get_session), user_id: UUID = Depends(current_user_id)) -> list[dict]:
+    """Every "A must happen before B" link (PRD F2.5), for the Tasks screen."""
+    rows = (await session.execute(select(TaskDependency).where(TaskDependency.user_id == user_id)
+                                  .order_by(TaskDependency.task_id))).scalars().all()
+    return [{'task_id': str(row.task_id), 'depends_on_task_id': str(row.depends_on_task_id)} for row in rows]
+
+
 @router.put('/{task_id}/dependencies', response_model=TaskRead)
 async def set_dependencies(task_id: UUID, payload: DependenciesUpdate,
     session: AsyncSession = Depends(get_session), user_id: UUID = Depends(current_user_id)):

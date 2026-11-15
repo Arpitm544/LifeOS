@@ -18,7 +18,8 @@ export function PriorityDetails({ breakdown, score }: { breakdown: PriorityBreak
   </dl>;
 }
 
-export function TaskCard({ task, onEdit }: { task: Task; onEdit?: (task: Task) => void }) {
+/** `waitsFor`: titles of open tasks this one depends on (shown while it is Blocked). */
+export function TaskCard({ task, onEdit, waitsFor = [] }: { task: Task; onEdit?: (task: Task) => void; waitsFor?: string[] }) {
   const { completeTask, preferences, notify } = useWorkspace();
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -42,6 +43,7 @@ export function TaskCard({ task, onEdit }: { task: Task; onEdit?: (task: Task) =
       {task.pinned ? <span className="status-label">Pinned</span> : null}
       {!done ? <button type="button" className={`priority priority-${task.priority_band.toLowerCase()}`} aria-expanded={open} aria-label={`Priority ${task.priority_band}. Show why`} onClick={() => setOpen(value => !value)}>{task.priority_band}</button> : null}
     </p>
+    {waitsFor.length && !done ? <p className="task-waits">Waits for: {waitsFor.join(", ")}</p> : null}
     {task.why && !done ? <p className="task-why">{task.why}</p> : null}
     {open && !done ? task.priority_breakdown ? <PriorityDetails breakdown={task.priority_breakdown} score={task.priority_score} /> : <p className="task-why">Score {Math.round(task.priority_score)}/100.</p> : null}
   </article>;

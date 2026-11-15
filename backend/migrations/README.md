@@ -12,6 +12,7 @@ Apply in order as an administrator in Supabase SQL Editor:
 - `006_runtime_safety.sql`: shared atomic rate-limit storage, expiry cleanup and current-date routine default.
 - `007_backend_enhancements.sql`: task priority `why`/breakdown columns, reminder kind check and indexes, `suggestions` table (RLS, `lifeos_api` grants), `worker_status` heartbeat table (admin only), analytics indexes and the `prune_lifeos_history()` retention function (scheduled with pg_cron when that extension is installed).
 - `008_google_calendar.sql`: `google_connections` (one row per user, Fernet-encrypted refresh token, RLS, `lifeos_api` grants) for read-only Google Calendar sync.
+- `009_weekly_insights.sql`: allows the `expired` suggestion status used by the Sunday insight job and adds an `activity_events(user_id, type, occurred_at)` index for the preference inference rules.
 
 Each of 002 and 003 is atomic. Invalid/orphaned existing data aborts 003 and rolls back; diagnose the failing constraint rather than deleting data. Avoid other applications sharing these public table names. Record successful migration execution before rerunning scripts.
 

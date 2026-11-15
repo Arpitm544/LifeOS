@@ -58,6 +58,11 @@ export type Today = {
   next: { type: "plan_block"; id: string; start_at: string; end_at: string; task_id: string; title: string | null } | null;
 };
 
+/** End-of-day check-in (PRD 5.6): today's unfinished blocks, due from 21:00 local. */
+export type Checkin = { date: string; due: boolean; checkin_time: string; blocks: { id: string; task_id: string; title: string; start_at: string; end_at: string }[] };
+export type CheckinResult = { action: "move_to_tomorrow"; moved: number; placed: { id: string; task_id: string; start_at: string; end_at: string }[]; unplaced_task_ids: string[] }
+  | { action: "drop"; dropped_tasks: number; batch_ids: string[] };
+
 export type ConflictOptionType = "extend_hours" | "move_flexible" | "renegotiate";
 export type ConflictOption = {
   type: ConflictOptionType; description: string; resolves: boolean; remaining_shortfall_min: number;
@@ -106,6 +111,7 @@ export type Insights = {
   completion_rate: number | null;
   planned_blocks_14d: number;
   completion_chart: { date: string; completed: number }[];
+  adherence_chart?: { date: string; planned: number; done: number; rate: number | null }[];
   samples: number;
   suggestions: Suggestion[];
 };

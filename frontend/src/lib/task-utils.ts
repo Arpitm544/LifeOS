@@ -123,6 +123,30 @@ export function preferenceUpdates(before: Preferences, after: Preferences) {
   return updates;
 }
 
+export const INFERRED_PREFIX = "inferred.";
+
+export type DependencyLink = { task_id: string; depends_on_task_id: string };
+
+/** Open tasks this one waits for ("A must happen before B", PRD F2.5). */
+export function blockersOf(taskId: string, links: DependencyLink[], tasks: Task[]) {
+  const byId = new Map(tasks.map(task => [task.id, task]));
+  return links.filter(link => link.task_id === taskId).map(link => byId.get(link.depends_on_task_id))
+    .filter((task): task is Task => !!task && task.status !== "done" && task.status !== "dropped");
+}
+
+/** Tasks that `taskId` may depend on: active, not itself, and not already waiting on it (no cycles). */
+export function dependencyChoices(taskId: string, links: DependencyLink[], tasks: Task[]) {
+  const dependents = new Set<string>();
+  const queue = [taskId];
+  while (queue.length) {
+    const current = queue.pop()!;
+    for (const link of links) {
+      if (link.depends_on_task_id === current && !dependents.has(link.task_id)) { dependents.add(link.task_id); queue.push(link.task_id); }
+    }
+  }
+  return tasks.filter(task => task.id !== taskId && isActive(task) && !dependents.has(task.id));
+}
+
 const preferenceLabels: Record<string, string> = {
   timezone: "Timezone", work_hours: "Working hours", quiet_hours: "Quiet hours", focus_windows: "Focus windows",
   reminder_lead: "Reminder lead", estimate_padding: "Estimate padding", work_hours_overrides: "Extended working days",
@@ -131,6 +155,11 @@ const preferenceLabels: Record<string, string> = {
 
 /** Human label and value for one preference row ("What LifeOS knows about you"). */
 export function describePreference(row: Pick<PreferenceRow, "key" | "value">): { label: string; value: string } {
+  // A learned proposal (`inferred.<key>`) reads like the preference it would change.
+  if (row.key.startsWith(INFERRED_PREFIX)) {
+    const target = describePreference({ key: row.key.slice(INFERRED_PREFIX.length), value: row.value });
+    return { label: `${target.label} (suggested change)`, value: target.value };
+  }
   const v = row.value as Record<string, unknown>;
   const label = preferenceLabels[row.key] ?? row.key.replace(/_/g, " ");
   if (row.key === "timezone") return { label, value: String(v.name ?? "") };
