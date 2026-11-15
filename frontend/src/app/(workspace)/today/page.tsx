@@ -1,9 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { Volume2, VolumeX } from "lucide-react";
+import { CalendarPlus, CheckCircle2, Clock3, ListChecks, ShieldAlert, ShieldCheck, Target, Volume2, VolumeX } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { PageHeading } from "@/components/layout/page-heading";
 import { useWorkspace } from "@/components/providers/workspace-provider";
 import { ConflictSheet } from "@/components/today/conflict-sheet";
 import { Notifications } from "@/components/today/notifications";
@@ -98,39 +97,85 @@ export default function TodayPage() {
   const nextEvent = today?.events.find(e => Date.parse(e.start_at) > clock);
   const upcoming = nextEvent && (!nextBlock || Date.parse(nextEvent.start_at) < Date.parse(nextBlock.start_at)) ? { title: nextEvent.title, start_at: nextEvent.start_at, event: true } : nextBlock ? { title: nextBlock.title ?? "Task", start_at: nextBlock.start_at, event: false } : null;
   const summary = today ? `${due.length ? `${due.length} task${due.length === 1 ? "" : "s"} due` : "Nothing due"} today. You have ${formatHours(today.free_min_left)} of open time left.` : "";
+  const overdue = due.filter(t => t.overdue).length;
+  const doneBlocks = today?.plan_blocks.filter(b => b.status === "done").length ?? 0;
+  const totalBlocks = today?.plan_blocks.length ?? 0;
+  const atRisk = today?.conflicts.length ?? 0;
+  // Share of the working day that is still open, for the "Open time" meter.
+  const workMin = Math.max(1, minutesOf(preferences.workEnd) - minutesOf(preferences.workStart));
+  const openShare = today ? Math.min(1, Math.max(0, today.free_min_left / workMin)) : 0;
+  const nowProgress = nowBlock ? Math.min(1, Math.max(0, (clock - Date.parse(nowBlock.start_at)) / (Date.parse(nowBlock.end_at) - Date.parse(nowBlock.start_at)))) : 0;
+  // Where the "now" marker sits in today's timeline: before the first item that has not started yet.
+  const nowIndex = items.findIndex(item => Date.parse(item.start_at) > clock);
+  const markerAt = nowIndex === -1 ? items.length : nowIndex;
+  const dateLabel = new Intl.DateTimeFormat("en-GB", { weekday: "long", day: "numeric", month: "long", timeZone: tz }).format(clock);
+
+  const viewToggle = <div className="segmented" role="group" aria-label="Schedule view">
+    <button type="button" className={view === "day" ? "selected" : ""} aria-pressed={view === "day"} onClick={() => setView("day")}>Day</button>
+    <button type="button" className={view === "week" ? "selected" : ""} aria-pressed={view === "week"} onClick={() => setView("week")}>Week</button>
+  </div>;
 
   return <>
-    <PageHeading eyebrow="Today · Your workspace" title="Your day at a glance." description="Your tasks, schedule and available time in one place." />
     {today?.conflicts.length ? <div className="conflict-banner" role="alert">{today.conflicts.map(c => <button key={c.id} onClick={() => setConflict(c)}><span><b>{formatHours(c.shortfall_min)} short</b> before {formatDeadline(c.deadline_at, tz)}. Needs {formatHours(c.needed_min)}, {formatHours(c.free_min)} free.</span><span className="banner-cta">See options →</span></button>)}</div> : null}
-    <section className="hero panel pale" aria-labelledby="briefing-title"><div className="hero-copy"><p className="eyebrow blue">Your day, in orbit</p><h2 id="briefing-title">Hello, {name.first}.</h2>
+    <section className="hero panel pale today-hero" aria-labelledby="briefing-title"><div className="hero-copy"><p className="eyebrow blue">{dateLabel}</p><h1 id="briefing-title">Hello, {name.first}.</h1>
       {brief ? <div className="brief" lang={brief.language}><p className="brief-headline">{brief.headline}</p>{brief.lines.length ? <ul className="brief-lines">{brief.lines.map(line => <li key={line}>{line}</li>)}</ul> : null}</div>
         : <p>{today ? summary : error ? "Your day could not be loaded." : "Loading your day…"}{today?.next ? <><br />Next up: {today.next.title ?? "Task"} at {formatClock(today.next.start_at, tz)}.</> : null}</p>}
       <div className="button-row"><button className="button" onClick={plan} disabled={planning}>{planning ? "Planning…" : planned ? "Replan" : "Plan my day"} <span aria-hidden="true">→</span></button><Link href="/chat" className="button secondary">Talk to LifeOS</Link>
         {brief ? <button type="button" className="text-button" onClick={() => { setVoiceError(""); if (voice.loading || voice.playing || voice.url) voice.stop(); else void voice.read(brief.spoken, speechLocale(brief.language)); }}>{voice.playing ? <VolumeX size={16} aria-hidden="true" /> : <Volume2 size={16} aria-hidden="true" />} {voice.loading ? "Preparing audio… (click to cancel)" : voice.playing ? "Stop" : "Read my brief"}</button> : null}</div>
       {voiceError ? <small className="error-message" role="alert">{voiceError}</small> : null}
       {planNote ? <small role="status">{planNote}</small> : <small>Plans the next 7 days around your events, routines and working hours.</small>}</div><Orbit /></section>
-    {brief ? <Nudges brief={brief} onChanged={load} onOpenConflict={id => { const match = today?.conflicts.find(c => c.id === id); if (match) setConflict(match); }} /> : null}
     {error ? <div className="error-message with-action" role="alert"><span>{error}</span><button className="text-button" onClick={load}>Try again</button></div> : null}
-    <section className="panel now-next" aria-label="Now and next"><div><p className="eyebrow muted">Now</p><h2>{nowBlock ? nowBlock.title ?? "Focus block" : "Free time"}</h2><p className="muted">{nowBlock ? `Until ${formatClock(nowBlock.end_at, tz)}` : today ? `${formatHours(today.free_min_left ?? 0)} of open time left today` : "…"}</p></div>
-      <div><p className="eyebrow muted">Next</p><h2>{upcoming ? upcoming.title : "Nothing else planned"}</h2><p className="muted">{upcoming ? `${upcoming.event ? "Event" : "Focus block"} at ${formatClock(upcoming.start_at, tz)}` : "Plan your day to fill open time."}</p></div>
-      <div className="view-toggle" role="group" aria-label="Schedule view"><button type="button" className={`filter-tab ${view === "day" ? "selected" : ""}`} aria-pressed={view === "day"} onClick={() => setView("day")}>Day</button><button type="button" className={`filter-tab ${view === "week" ? "selected" : ""}`} aria-pressed={view === "week"} onClick={() => setView("week")}>Week</button></div></section>
-    {view === "week" && today ? <section className="panel week-panel"><div className="section-heading"><div><h2>Your week</h2><p>Planned vs free working time per day, in {tz}. Red means the day cannot hold what is due.</p></div></div><WeekView start={String(today.date)} timezone={tz} onChanged={load} /></section> : null}
-    <div className="two-columns today-columns" hidden={view === "week"}><section className="panel agenda"><div className="section-heading"><div><h2>Your schedule</h2><p>Events and focus blocks for today, in {tz}.</p></div><Link href="/tasks" className="text-button">All tasks <span aria-hidden="true">→</span></Link></div>
-      {!today && !error ? <p className="muted" role="status">Loading…</p> : items.length ? <ol className="timeline">{items.map(item => <li key={`${item.kind}-${item.id}`} className={`timeline-item ${item.kind} ${today?.next?.id === item.id ? "next" : ""} ${item.status && item.status !== "planned" ? item.status : ""}`}>
-        <span className="timeline-time">{formatClock(item.start_at, tz)}<small>{formatClock(item.end_at, tz)}</small></span>
-        <div><p className="task-title">{item.title}</p><p className="task-meta">{item.kind === "event" ? `Event${item.location ? ` · ${item.location}` : ""}` : today?.next?.id === item.id ? "Next focus block" : item.status === "planned" ? "Focus block" : item.status}</p></div>
-      </li>)}</ol> : today ? <div className="empty-state"><h3>Nothing scheduled yet.</h3><p>Plan your day to turn your tasks into focus blocks.</p><button className="button secondary" onClick={plan} disabled={planning}>Plan my day</button></div> : null}
-      <div className="section-heading due-heading"><div><h2>Due today</h2><p>Including anything overdue.</p></div></div>
-      {today ? due.length ? <div className="task-list">{due.map(task => <article key={task.id} className="task-card"><div className="task-title-row"><button className="task-check" aria-label={`Complete ${task.title}`} disabled={!!completing} onClick={() => complete(task.id)} /><h3 className="task-title">{task.title}</h3></div>
+    {today ? <section className="stat-row" aria-label="Today in numbers">
+      <div className="stat"><span className="stat-label"><Clock3 size={15} aria-hidden="true" /> Open time left</span><span className="stat-value">{formatHours(today.free_min_left)}</span><div className="meter" role="meter" aria-label="Share of your working day still open" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(openShare * 100)}><span style={{ width: `${openShare * 100}%` }} /></div><span className="stat-note">of your {preferences.workStart}–{preferences.workEnd} working day</span></div>
+      <div className="stat"><span className="stat-label"><Target size={15} aria-hidden="true" /> Focus blocks done</span><span className="stat-value">{doneBlocks}<span> of {totalBlocks}</span></span><div className="meter" role="meter" aria-label="Focus blocks done" aria-valuemin={0} aria-valuemax={totalBlocks || 1} aria-valuenow={doneBlocks}><span style={{ width: `${totalBlocks ? (doneBlocks / totalBlocks) * 100 : 0}%` }} /></div><span className="stat-note">{totalBlocks ? `${planned} still to do` : "None planned yet"}</span></div>
+      <a href="#due-today" className={`stat stat-link ${overdue ? "warn" : ""}`}><span className="stat-label"><ListChecks size={15} aria-hidden="true" /> Due today</span><span className="stat-value">{due.length}</span><span className="stat-note">{overdue ? `${overdue} overdue` : due.length ? "None overdue" : "You're all clear"}</span></a>
+      {atRisk ? <button type="button" className="stat stat-link risk" onClick={() => setConflict(today.conflicts[0])}><span className="stat-label"><ShieldAlert size={15} aria-hidden="true" /> Capacity guard</span><span className="stat-value">{atRisk} at risk</span><span className="stat-note">See your options <span aria-hidden="true">→</span></span></button>
+        : <div className="stat ok"><span className="stat-label"><ShieldCheck size={15} aria-hidden="true" /> Capacity guard</span><span className="stat-value">All fit</span><span className="stat-note">Every deadline fits your week</span></div>}
+    </section> : !error ? <section className="stat-row" aria-busy="true" aria-label="Loading today in numbers">{[0, 1, 2, 3].map(i => <div key={i} className="stat"><span className="skeleton" style={{ width: "55%" }} /><span className="skeleton tall" style={{ width: "40%" }} /><span className="skeleton" style={{ width: "75%" }} /></div>)}</section> : null}
+    {brief ? <Nudges brief={brief} onChanged={load} onOpenConflict={id => { const match = today?.conflicts.find(c => c.id === id); if (match) setConflict(match); }} /> : null}
+    {view === "week" && today ? <section className="panel week-panel"><div className="section-heading"><div><h2>Your week</h2><p>Planned vs free working time per day, in {tz}. Red means the day cannot hold what is due.</p></div>{viewToggle}</div><WeekView start={String(today.date)} timezone={tz} onChanged={load} /></section> : null}
+    <div className="two-columns today-columns" hidden={view === "week"}><div className="main-stack">
+      <section className="panel agenda"><div className="section-heading"><div><h2>Your schedule</h2><p>Events and focus blocks for today, in {tz}.</p></div>{viewToggle}</div>
+      {!today && !error ? <div className="timeline-skeleton" role="status" aria-label="Loading your schedule">{[0, 1, 2].map(i => <div key={i}><span className="skeleton" /><span className="skeleton block" /></div>)}</div> : items.length ? <ol className="timeline">{items.flatMap((item, index) => {
+        const past = Date.parse(item.end_at) <= clock;
+        const live = !past && Date.parse(item.start_at) <= clock;
+        const row = <li key={`${item.kind}-${item.id}`} className={`timeline-item ${item.kind} ${today?.next?.id === item.id ? "next" : ""} ${live ? "live" : ""} ${past ? "past" : ""} ${item.status && item.status !== "planned" ? item.status : ""}`}>
+          <span className="timeline-time">{formatClock(item.start_at, tz)}<small>{formatClock(item.end_at, tz)}</small></span>
+          <span className="timeline-dot" aria-hidden="true" />
+          <div className="timeline-body"><p className="task-title">{item.title}</p><p className="task-meta"><span className={`kind-chip ${item.kind}`}>{item.kind === "event" ? "Event" : "Focus"}</span>{item.kind === "event" ? item.location ?? null : live ? "In progress" : today?.next?.id === item.id ? "Up next" : item.status === "planned" ? null : item.status}</p></div>
+        </li>;
+        return index === markerAt ? [<li key="now" className="timeline-now" aria-label={`Now, ${formatClock(new Date(clock).toISOString(), tz)}`}><span>Now · {formatClock(new Date(clock).toISOString(), tz)}</span></li>, row] : [row];
+      }).concat(markerAt === items.length ? [<li key="now" className="timeline-now" aria-label={`Now, ${formatClock(new Date(clock).toISOString(), tz)}`}><span>Now · {formatClock(new Date(clock).toISOString(), tz)}</span></li>] : [])}</ol> : today ? <div className="empty-state"><CalendarPlus size={32} aria-hidden="true" /><h3>Nothing scheduled yet.</h3><p>Plan your day to turn your tasks into focus blocks.</p><button className="button secondary" onClick={plan} disabled={planning}>Plan my day</button></div> : null}
+      </section>
+      <section className="panel" id="due-today" aria-labelledby="due-title"><div className="section-heading"><div><h2 id="due-title">Due today</h2><p>Including anything overdue.</p></div><Link href="/tasks" className="text-button">All tasks <span aria-hidden="true">→</span></Link></div>
+      {today ? due.length ? <div className="task-list">{due.map(task => <article key={task.id} className={`task-card ${task.overdue ? "task-overdue" : ""}`}><div className="task-title-row"><button className="task-check" aria-label={`Complete ${task.title}`} disabled={!!completing} onClick={() => complete(task.id)} /><h3 className="task-title">{task.title}</h3></div>
         <p className="task-meta">{task.overdue ? <span className="status-label overdue">Overdue</span> : null}{formatDeadline(task.deadline_at, tz)}{task.status === "blocked" ? <span className="status-label">Blocked</span> : null}<span className={`priority priority-${task.priority_band.toLowerCase()}`}>{task.priority_band}</span></p>
-        {task.why ? <p className="task-why">{task.why}</p> : null}</article>)}</div> : <p className="muted">Nothing due today.</p> : null}
-    </section><div className="side-stack">
-      <section className="panel dark capacity"><p className="eyebrow accent">Capacity guard</p><h2>{today ? today.conflicts.length ? `${today.conflicts.length} deadline${today.conflicts.length === 1 ? "" : "s"} at risk.` : "Your deadlines fit." : "Checking your week…"}</h2>
-        {today ? <><p>{formatHours(today.free_min_left)} free today <span>/</span> {planned} block{planned === 1 ? "" : "s"} planned</p><small>Checked after every change to your tasks or plan.</small></> : null}</section>
+        {task.why ? <p className="task-why">{task.why}</p> : null}</article>)}</div> : <div className="empty-inline"><CheckCircle2 size={18} aria-hidden="true" /> Nothing due today. Enjoy the room to breathe.</div> : null}
+      </section>
+    </div><div className="side-stack">
+      <section className="panel dark now-card" aria-label="Now and next">
+        <div><p className="eyebrow accent">Now</p><h2>{nowBlock ? nowBlock.title ?? "Focus block" : "Free time"}</h2><p className="now-sub">{nowBlock ? `Until ${formatClock(nowBlock.end_at, tz)}` : today ? `${formatHours(today.free_min_left ?? 0)} of open time left today` : "…"}</p>
+          {nowBlock ? <div className="meter light" aria-hidden="true"><span style={{ width: `${nowProgress * 100}%` }} /></div> : null}</div>
+        <div className="now-next-divider" />
+        <div><p className="eyebrow accent">Next{upcoming ? ` · ${untilLabel(Date.parse(upcoming.start_at) - clock)}` : ""}</p><h3>{upcoming ? upcoming.title : "Nothing else planned"}</h3><p className="now-sub">{upcoming ? `${upcoming.event ? "Event" : "Focus block"} at ${formatClock(upcoming.start_at, tz)}` : "Plan your day to fill open time."}</p></div>
+      </section>
       <section className="panel focus-card"><p className="eyebrow muted">Your focus window</p><h2>{preferences.focusStart}–{preferences.focusEnd}</h2><p>LifeOS plans demanding work inside your working hours, {preferences.workStart}–{preferences.workEnd}.</p><Link className="text-button" href="/profile">Change in Profile <span aria-hidden="true">→</span></Link></section>
       <Notifications onChanged={load} />
     </div></div>
     {voice.url ? <audio ref={voice.element} src={voice.url} autoPlay onPlay={() => voice.setPlaying(true)} onEnded={voice.stop} onError={() => { voice.stop(); setVoiceError("Could not play the brief."); }} /> : null}
     {conflict ? <ConflictSheet key={conflict.id} conflict={conflict} onClose={() => setConflict(undefined)} onChanged={load} /> : null}
   </>;
+}
+
+function minutesOf(hhmm: string) {
+  const [h, m] = hhmm.split(":").map(Number);
+  return (h || 0) * 60 + (m || 0);
+}
+
+function untilLabel(ms: number) {
+  const min = Math.max(0, Math.round(ms / 60_000));
+  if (min < 1) return "now";
+  if (min < 60) return `in ${min} min`;
+  const h = Math.floor(min / 60), m = min % 60;
+  return `in ${h} h${m ? ` ${m} min` : ""}`;
 }

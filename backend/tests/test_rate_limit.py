@@ -22,7 +22,7 @@ def test_voice_quotas_are_per_user_per_service_and_expire(monkeypatch):
         return authorization
 
     monkeypatch.setattr(auth, 'current_user_id', identity)
-    monkeypatch.setattr(config, 'get_settings', lambda: SimpleNamespace(api_rate_limit=300, chat_rate_limit=30))
+    monkeypatch.setattr(config, 'get_settings', lambda: SimpleNamespace(api_rate_limit=300, chat_rate_limit=30, voice_rate_limit=5))
     monkeypatch.setattr('app.rate_limit.time.monotonic', lambda: 0)
     application = FastAPI()
     limiter = SlidingWindowLimiter()

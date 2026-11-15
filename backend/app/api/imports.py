@@ -60,6 +60,9 @@ async def extract(request: ExtractRequest, session: AsyncSession = Depends(get_s
             raise HTTPException(status_code=503, detail={'code': 'vision_unavailable', 'message':
                 'Photo import needs an AI model that can read images. Add a Gemini, OpenAI, Groq or Anthropic key '
                 'to the server, or paste the text instead.'})
+        except syllabus_import.PhotoBusy:
+            raise HTTPException(status_code=503, detail='The photo reader is busy or has hit its usage limit. '
+                                'Try again in a little while, or paste the text instead.')
         except syllabus_import.PhotoReadError:
             raise HTTPException(status_code=502, detail='LifeOS could not read that photo. Try a clearer, closer photo or paste the text.')
         return {**result, 'timezone': tz_name}

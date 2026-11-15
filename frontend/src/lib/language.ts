@@ -1,15 +1,8 @@
-// Chat languages: the ones Deepgram's multilingual model transcribes (nova-3, language=multi).
+// Supported languages: English and Hindi (Hinglish too: Deepgram's nova-3 "multi" handles mixing the two).
+// Anything else that is detected is answered in English.
 export const languages = [
   { code: "en", label: "English", locale: "en-US" },
   { code: "hi", label: "हिन्दी · Hindi", locale: "hi-IN" },
-  { code: "es", label: "Español · Spanish", locale: "es-ES" },
-  { code: "fr", label: "Français · French", locale: "fr-FR" },
-  { code: "de", label: "Deutsch · German", locale: "de-DE" },
-  { code: "pt", label: "Português · Portuguese", locale: "pt-BR" },
-  { code: "it", label: "Italiano · Italian", locale: "it-IT" },
-  { code: "nl", label: "Nederlands · Dutch", locale: "nl-NL" },
-  { code: "ru", label: "Русский · Russian", locale: "ru-RU" },
-  { code: "ja", label: "日本語 · Japanese", locale: "ja-JP" },
 ] as const;
 
 export type LanguageSetting = "auto" | (typeof languages)[number]["code"];
@@ -23,12 +16,9 @@ export function baseLanguage(value: unknown): string | null {
   return /^[a-z]{2,3}$/.test(base) ? base : null;
 }
 
-/** Languages whose script gives them away; Latin-script text stays unknown. */
+/** Devanagari script gives Hindi away; Latin-script text (English or romanised Hindi) stays unknown. */
 export function scriptLanguage(text: string): string | null {
-  if (/[ऀ-ॿ]/.test(text)) return "hi";
-  if (/[぀-ヿ]/.test(text)) return "ja";
-  if (/[Ѐ-ӿ]/.test(text)) return "ru";
-  return null;
+  return /[ऀ-ॿ]/.test(text) ? "hi" : null;
 }
 
 /** The setting wins; otherwise what Deepgram heard; otherwise the script of what was typed. */
@@ -49,6 +39,12 @@ export function readLanguageSetting(): LanguageSetting {
     const value = window.localStorage.getItem(storageKey);
     return value && (value === "auto" || codes.has(value)) ? value as LanguageSetting : "auto";
   } catch { return "auto"; }
+}
+
+/** The language the user pinned in Chat settings, or null for "auto". */
+export function pinnedLanguage(): string | null {
+  const setting = readLanguageSetting();
+  return setting === "auto" ? null : setting;
 }
 
 export function saveLanguageSetting(value: LanguageSetting) {

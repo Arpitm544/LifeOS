@@ -3,9 +3,11 @@
 import { Mic, Square } from "lucide-react";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { ActionCard } from "@/components/chat/action-card";
+import { VoiceAgent } from "@/components/layout/voice-agent";
 import { useWorkspace } from "@/components/providers/workspace-provider";
 import { useVoiceInput } from "@/hooks/use-voice-input";
 import { readableError } from "@/lib/api";
+import { pinnedLanguage } from "@/lib/language";
 import type { ChatResponse } from "@/lib/types";
 
 /** Ctrl/Cmd + K quick add and the floating mic (PRD 6): the same chat pipeline from any screen. */
@@ -14,11 +16,12 @@ export function QuickAdd() {
   const dialog = useRef<HTMLDialogElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
   const [open, setOpen] = useState(false);
+  const [talking, setTalking] = useState(false);
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const [response, setResponse] = useState<ChatResponse>();
   const [error, setError] = useState("");
-  const voice = useVoiceInput(value => { setText(value); input.current?.focus(); });
+  const voice = useVoiceInput(value => { setText(value); input.current?.focus(); }, { language: pinnedLanguage });
 
   useEffect(() => {
     function shortcut(event: KeyboardEvent) {
@@ -27,8 +30,11 @@ export function QuickAdd() {
         setOpen(true);
       }
     }
+    // The top bar's Quick add button opens the same dialog.
+    const openFromButton = () => setOpen(true);
     document.addEventListener("keydown", shortcut);
-    return () => document.removeEventListener("keydown", shortcut);
+    window.addEventListener("lifeos:quick-add", openFromButton);
+    return () => { document.removeEventListener("keydown", shortcut); window.removeEventListener("lifeos:quick-add", openFromButton); };
   }, []);
   useEffect(() => {
     if (open && dialog.current && !dialog.current.open) { dialog.current.showModal(); input.current?.focus(); }
@@ -59,8 +65,11 @@ export function QuickAdd() {
 
   const choice = response?.confirmation ? response.confirmation.options : response?.clarification ? response.clarification.options : [];
   return <>
-    <button type="button" className={`floating-mic${voice.listening ? " listening" : ""}`} aria-label="Quick add with voice or text (Ctrl or Cmd + K)" title="Quick add (Ctrl/Cmd + K)"
-      onClick={() => { setOpen(true); if (voice.supported !== false && !voice.listening) window.setTimeout(() => voice.toggle(""), 0); }}><Mic size={22} aria-hidden="true" /></button>
+    {/* The mic starts a spoken conversation; without microphone support it opens typed quick add instead. */}
+    <button type="button" className={`floating-mic${talking ? " is-active" : ""}`} aria-pressed={voice.supported !== false ? talking : undefined}
+      aria-label={voice.supported === false ? "Quick add (Ctrl or Cmd + K)" : talking ? "End voice conversation" : "Talk to LifeOS"} title={voice.supported === false ? "Quick add (Ctrl/Cmd + K)" : "Talk to LifeOS"}
+      onClick={() => { if (voice.supported === false) setOpen(true); else setTalking(value => !value); }}><Mic size={22} aria-hidden="true" /></button>
+    {talking ? <VoiceAgent onClose={() => setTalking(false)} /> : null}
     {open ? <dialog ref={dialog} className="task-dialog quick-add" aria-labelledby="quick-add-title" onCancel={close} onClose={() => setOpen(false)}>
       <button className="dialog-close" onClick={close} aria-label="Close quick add">×</button>
       <p className="eyebrow blue" id="quick-add-title">Quick add</p>

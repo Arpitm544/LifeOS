@@ -211,6 +211,7 @@ class OpenAICompatibleLLMClient(AnthropicLLMClient):
             self.url = url
         if provider:
             self.provider = provider
+        self.reasoning_effort = ''  # sent with call_tool when set (Gemini's OpenAI layer accepts it)
 
     async def _post(self, body: dict) -> dict:
         return await _post_json(self.url, {'Authorization': 'Bearer ' + self.api_key}, body,
@@ -267,6 +268,8 @@ class OpenAICompatibleLLMClient(AnthropicLLMClient):
             'tools': [{'type': 'function', 'function': {'name': tool['name'],
                 'description': tool.get('description', ''), 'parameters': tool['input_schema']}}],
             'tool_choice': {'type': 'function', 'function': {'name': tool['name']}}}
+        if self.reasoning_effort:
+            body['reasoning_effort'] = self.reasoning_effort
         import httpx
         try:
             data = await self._post(body)
@@ -275,7 +278,9 @@ class OpenAICompatibleLLMClient(AnthropicLLMClient):
             # The prompt already says to always call the tool, so retry once letting the model choose.
             if exc.response is None or exc.response.status_code != 400:
                 raise
-            data = await self._post({**body, 'tool_choice': 'auto'})
+            # Drop reasoning_effort too, in case it is what the endpoint rejected.
+            retry = {key: value for key, value in body.items() if key != 'reasoning_effort'}
+            data = await self._post({**retry, 'tool_choice': 'auto'})
         for item in self._message(data).get('tool_calls') or []:
             function = item.get('function') or {}
             if function.get('name') == tool['name']:
@@ -394,5 +399,7 @@ def configured_vision_llm():
             continue
         client.model = client.insight_model = vision_model
         client.timeout_seconds = timeout
+        if provider == 'gemini':
+            client.reasoning_effort = _setting(settings, 'vision_reasoning_effort', 'low').lower()
         return client
     return None

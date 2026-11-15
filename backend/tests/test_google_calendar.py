@@ -216,6 +216,7 @@ def test_callback_route_binds_connection_to_the_state_user_and_rejects_bad_state
     @asynccontextmanager
     async def fake_user_session(user_id):
         async with factory() as session:
+            await session.execute(select(1))  # like the real one, a statement runs first and begins the transaction
             yield session
     monkeypatch.setattr(api, 'user_session', fake_user_session)
     monkeypatch.setattr(api.gcal, 'new_client', lambda: make_http(google_handler([gevent('e1')])))
@@ -228,6 +229,12 @@ def test_callback_route_binds_connection_to_the_state_user_and_rejects_bad_state
             return response.headers['location'].split('google=')[1]
         assert outcome(client.get('/api/google/callback', params={'error': 'access_denied'})) == 'denied'
         assert outcome(client.get('/api/google/callback', params={'code': 'c', 'state': 'forged'})) == 'expired'
+        async def no_scope(http, code):
+            raise api.gcal.ScopeNotGranted('Calendar access was not granted.')
+        real_exchange = api.gcal.exchange_code
+        monkeypatch.setattr(api.gcal, 'exchange_code', no_scope)
+        assert outcome(client.get('/api/google/callback', params={'code': 'c', 'state': g.make_state(OWNER)})) == 'no_scope'
+        monkeypatch.setattr(api.gcal, 'exchange_code', real_exchange)
         assert outcome(client.get('/api/google/callback', params={'code': 'c', 'state': g.make_state(OWNER)})) == 'connected'
 
     async def check():

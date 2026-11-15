@@ -59,11 +59,19 @@ async def callback(code: str = Query(default=''), state: str = Query(default='')
     try:
         async with gcal.new_client() as http:
             refresh = await gcal.exchange_code(http, code)
-            async with user_session(user_id) as session, session.begin():
+            # user_session has already begun a transaction (it upserts the user row), so commit rather than begin().
+            async with user_session(user_id) as session:
                 await gcal.save_connection(session, user_id, refresh)
-            async with user_session(user_id) as session, session.begin():
+                await session.commit()
+            async with user_session(user_id) as session:
                 await gcal.sync_user(session, user_id, http)
-    except gcal.GoogleError:
+                await session.commit()
+    except gcal.GoogleError as exc:
+        log.warning('google callback: %s', exc)
+        if isinstance(exc, gcal.ScopeNotGranted):
+            return done('no_scope')
+        if isinstance(exc, gcal.NotConfigured):
+            return done('not_configured')
         # The link was saved before the first sync; a sync problem is shown on the page, not as a failed connect.
         return done('connected_sync_failed' if await _connected(user_id) else 'error')
     except Exception:
