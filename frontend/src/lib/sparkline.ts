@@ -21,3 +21,10 @@ export function sparklinePoints(values: (number | null)[], width: number, height
 }
 
 const round = (value: number) => Math.round(value * 10) / 10;
+
+/** Caption under the plan adherence metric. Only blocks that have already ended are counted. */
+export function adherenceCaption(endedBlocks: number) {
+  return endedBlocks
+    ? `Of ${endedBlocks} planned ${endedBlocks === 1 ? "block" : "blocks"} that ended in the last 14 days`
+    : "Shows once a planned block has ended";
+}

@@ -5,6 +5,7 @@ import { PageHeading } from "@/components/layout/page-heading";
 import { useWorkspace } from "@/components/providers/workspace-provider";
 import { Sparkline } from "@/components/ui/sparkline";
 import { readableError } from "@/lib/api";
+import { adherenceCaption } from "@/lib/sparkline";
 import type { Insights, Suggestion } from "@/lib/types";
 
 const hour = (value: number) => `${String(value).padStart(2, "0")}:00`;
@@ -52,7 +53,7 @@ export default function InsightsPage() {
     <PageHeading eyebrow="A clearer picture of you" title="Find a pace that works." description={data.cold_start ? `Learning from your history: ${data.samples} of 10 completed tasks with timing so far.` : "Patterns from your last 14 days of tasks and plans."} />
     <div className="metrics-grid">
       <section className="panel metric"><h2>Completed this week</h2><p className="metric-value">{thisWeek}</p><Sparkline values={chart.map(day => day.completed)} label={`Completed per day, last 14 days: ${chart.map(day => day.completed).join(", ")}`} /><p>{change === 0 ? "Same as last week" : `${Math.abs(change)} ${change < 0 ? "fewer" : "more"} than last week`}{data.completion_rate !== null ? ` · ${Math.round(data.completion_rate * 100)}% on time` : ""}</p></section>
-      <section className="panel metric"><h2>Plan adherence</h2><p className="metric-value">{adherence}</p>{data.planned_blocks_14d && data.adherence_chart?.length ? <Sparkline values={data.adherence_chart.map(day => day.rate)} max={1} label={`Share of planned blocks done per day, last 14 days: ${data.adherence_chart.map(day => day.rate === null ? "none planned" : `${Math.round(day.rate * 100)}%`).join(", ")}`} /> : null}<p>{data.planned_blocks_14d ? `Of ${data.planned_blocks_14d} planned blocks in 14 days` : "No planned blocks yet"}</p></section>
+      <section className="panel metric"><h2>Plan adherence</h2><p className="metric-value">{adherence}</p>{data.planned_blocks_14d && data.adherence_chart?.length ? <Sparkline values={data.adherence_chart.map(day => day.rate)} max={1} label={`Share of planned blocks done per day, last 14 days: ${data.adherence_chart.map(day => day.rate === null ? "none planned" : `${Math.round(day.rate * 100)}%`).join(", ")}`} /> : null}<p>{adherenceCaption(data.planned_blocks_14d ?? 0)}</p></section>
       <section className="panel metric"><h2>Estimate factor</h2><p className="metric-value">{topFactor ? `${topFactor}×` : "—"}</p><p>{topCategory ? `${topCategory[0].toUpperCase()}${topCategory.slice(1)} tasks vs. your estimates` : "Needs more completed tasks"}</p></section>
     </div>
     <div className="two-columns insights-columns"><section className="panel chart-panel"><h2>Progress, one day at a time.</h2><p>Completed tasks · Last 14 days</p>
