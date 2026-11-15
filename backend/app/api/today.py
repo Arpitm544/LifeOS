@@ -1,5 +1,7 @@
 from __future__ import annotations
-from typing import Optional
+from typing import Literal, Optional
+
+from pydantic import BaseModel, ConfigDict, Field
 
 
 from datetime import date, datetime, time, timedelta, timezone
@@ -48,6 +50,101 @@ async def free_minutes_left(session, user_id, values, zone, *, now, start, end, 
             minutes -= max(0, overlap)
         total += max(0, minutes)
     return int(total)
+
+
+CHECKIN_TIME = time(21, 0)  # PRD 5.6: end-of-day check-in, default 21:00 local
+
+
+async def _checkin_window(session, user_id, now: datetime):
+    values = await active_preferences(session, user_id)
+    zone = ZoneInfo(values.get('timezone', {}).get('name', 'UTC'))
+    local = now.astimezone(zone)
+    start = datetime.combine(local.date(), time.min, tzinfo=zone).astimezone(timezone.utc)
+    tomorrow = datetime.combine(local.date() + timedelta(days=1), time.min, tzinfo=zone).astimezone(timezone.utc)
+    return local, start, tomorrow
+
+
+async def unfinished_blocks(session, user_id, *, now: datetime, start: datetime, ids=None, lock=False):
+    """Today's planned blocks that have started (or ended) but were not marked done, for open tasks."""
+    query = (select(PlanBlock, Task.title).join(Task, and_(Task.id == PlanBlock.task_id, Task.user_id == user_id))
+             .where(PlanBlock.user_id == user_id, PlanBlock.status == 'planned', PlanBlock.start_at >= start,
+                    PlanBlock.start_at <= now, Task.status.in_(['open', 'blocked'])).order_by(PlanBlock.start_at))
+    if ids is not None:
+        query = query.where(PlanBlock.id.in_(ids))
+    return list((await session.execute(query.with_for_update(of=PlanBlock) if lock else query)).all())
+
+
+async def checkin_state(session, user_id, *, now: datetime) -> dict:
+    local, start, _ = await _checkin_window(session, user_id, now)
+    rows = await unfinished_blocks(session, user_id, now=now, start=start)
+    return {'date': local.date(), 'due': local.time() >= CHECKIN_TIME and bool(rows),
+            'checkin_time': CHECKIN_TIME.strftime('%H:%M'),
+            'blocks': [{'id': str(block.id), 'task_id': str(block.task_id), 'title': title,
+                        'start_at': block.start_at, 'end_at': block.end_at} for block, title in rows]}
+
+
+@router.get('/checkin')
+async def checkin(session: AsyncSession = Depends(get_session), user_id: UUID = Depends(current_user_id)) -> dict:
+    """End-of-day check-in (PRD 5.6): unfinished blocks with Move to tomorrow or Drop."""
+    return await checkin_state(session, user_id, now=datetime.now(timezone.utc))
+
+
+class CheckinAction(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    action: Literal['move_to_tomorrow', 'drop']
+    block_ids: list[UUID] = Field(min_length=1, max_length=50)
+
+
+@router.post('/checkin')
+async def apply_checkin(payload: CheckinAction, session: AsyncSession = Depends(get_session),
+                        user_id: UUID = Depends(current_user_id)) -> dict:
+    return await apply_checkin_action(session, user_id, payload, now=datetime.now(timezone.utc))
+
+
+async def apply_checkin_action(session, user_id, payload: CheckinAction, *, now: datetime) -> dict:
+    from fastapi import HTTPException
+    from ..models import ActivityEvent
+    from ..services.domain_service import audit, lock_owner, snapshot
+    from ..services.planning_service import rebuild_plan
+    from ..services.task_service import drop_task
+    await lock_owner(session, user_id)
+    now = _utc(now)
+    _, start, tomorrow = await _checkin_window(session, user_id, now)
+    ids = set(payload.block_ids)
+    rows = await unfinished_blocks(session, user_id, now=now, start=start, ids=ids, lock=True)
+    if len(rows) != len(ids):
+        raise HTTPException(status_code=409, detail='Some of those blocks are no longer unfinished today')
+    session.add(ActivityEvent(user_id=user_id, type='checkin_' + payload.action[:24], occurred_at=now,
+                              payload={'blocks': len(rows)}))
+    if payload.action == 'drop':
+        # Drop gives up on the task itself; each task is one undoable batch.
+        batches, seen = [], set()
+        for block, _ in rows:
+            before = snapshot(block)
+            block.status = 'missed'
+            await audit(session, user_id, block, before, 'update')
+            if block.task_id in seen:
+                continue
+            seen.add(block.task_id)
+            task = (await session.execute(select(Task).where(Task.id == block.task_id, Task.user_id == user_id)
+                                          .with_for_update())).scalar_one()
+            batches.append(str(await drop_task(session, user_id, task)))
+        await session.commit()
+        return {'action': 'drop', 'dropped_tasks': len(seen), 'batch_ids': batches}
+    for block, _ in rows:
+        before = snapshot(block)
+        block.status = 'moved'
+        await audit(session, user_id, block, before, 'update')
+    await session.flush()
+    # Re-plan from the start of tomorrow, so the moved work lands tomorrow rather than late tonight.
+    result = await rebuild_plan(session, user_id, now=max(now, tomorrow))
+    moved_tasks = {str(block.task_id) for block, _ in rows}
+    placed = [item for item in result['blocks'] if str(item.task_id) in moved_tasks]
+    await session.commit()
+    return {'action': 'move_to_tomorrow', 'moved': len(rows),
+            'placed': [{'id': str(item.id), 'task_id': str(item.task_id), 'start_at': item.start_at,
+                        'end_at': item.end_at} for item in placed],
+            'unplaced_task_ids': [str(item) for item in result['unplaced_task_ids'] if str(item) in moved_tasks]}
 
 
 @router.get("")

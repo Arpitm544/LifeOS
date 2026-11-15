@@ -26,6 +26,21 @@ async def local_plan_date(session, owner, start):
 router = APIRouter(prefix="/api/plan-blocks", tags=["planning"])
 
 
+def _utc(value: datetime) -> datetime:
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+
+
+async def record_block_move(session, owner, block: PlanBlock) -> None:
+    """Log the local hour a block was moved to (F6 rule input), then re-run the inference rules."""
+    from ..models import ActivityEvent
+    from ..services.preference_inference import local_hour, run_inference
+    session.add(ActivityEvent(user_id=owner, type='block_moved', entity_id=block.id,
+        occurred_at=datetime.now(timezone.utc),
+        payload={'hour': local_hour(block.start_at, await active_preferences(session, owner))}))
+    await session.flush()
+    await run_inference(session, owner)
+
+
 def output(block: PlanBlock) -> dict:
     return {"id": str(block.id), "task_id": str(block.task_id), "start_at": block.start_at,
             "end_at": block.end_at, "status": block.status, "plan_date": block.plan_date}
@@ -87,12 +102,15 @@ async def patch_block(block_id: UUID, payload: PlanBlockPatch, session: AsyncSes
     if {'start_at', 'end_at'} & changes.keys() or changes.get('status') == 'planned':
         await validate_placement(session, user_id, block.task_id, changes.get('start_at', block.start_at),
                                  changes.get('end_at', block.end_at), block.id)
+    moved = 'start_at' in changes and changes['start_at'] != _utc(block.start_at)
     for key, value in changes.items():
         setattr(block, key, value)
     if 'start_at' in changes:
         block.plan_date = await local_plan_date(session, user_id, block.start_at)
     if block.end_at <= block.start_at:
         raise HTTPException(status_code=422, detail="end_at must be after start_at")
+    if moved:
+        await record_block_move(session, user_id, block)
     await session.commit()
     await session.refresh(block)
     return output(block)

@@ -81,6 +81,10 @@ async def reminder_action(reminder_id: UUID, request: ReminderActionRequest,
     reminder = await apply_reminder_action(session, user_id=user_id, reminder_id=reminder_id, action=request.action.value)
     if reminder is None:
         raise HTTPException(status_code=404, detail="Reminder not found")
+    if request.action.value.startswith('snooze'):
+        # Repeated snoozes may produce a "remind me later" proposal (F6); it waits for acceptance.
+        from ..services.preference_inference import run_inference
+        await run_inference(session, user_id)
     await session.commit()
     return {"id": str(reminder.id), "status": reminder.status, "action_taken": reminder.action_taken,
             "fire_at": reminder.fire_at}
@@ -132,6 +136,8 @@ async def reschedule(reminder_id: UUID, request: RescheduleRequest, session: Asy
     reminder.fire_at, reminder.status, reminder.action_taken = start, 'pending', 'reschedule'
     # Undo of this action restores the reminders too (metadata, ignored by the snapshot check).
     log.after = {**log.after, '_reminder_restore': restore}
+    from .plan_blocks import record_block_move
+    await record_block_move(session, user_id, block)
     await session.commit()
     return {"id": str(reminder.id), "status": reminder.status, "fire_at": reminder.fire_at,
             "plan_block": {"id": str(block.id), "start_at": block.start_at, "end_at": block.end_at},
@@ -165,6 +171,9 @@ async def push_action(reminder_id: UUID, request: PushActionRequest,
         reminder = await apply_reminder_action(session, user_id=user_id, reminder_id=reminder_id, action=request.action)
         if reminder is None:
             raise HTTPException(status_code=404, detail="Reminder not found")
+        if request.action.startswith('snooze'):
+            from ..services.preference_inference import run_inference
+            await run_inference(session, user_id)
         await session.commit()
         return {"id": str(reminder.id), "status": reminder.status, "action_taken": reminder.action_taken,
                 "fire_at": reminder.fire_at}

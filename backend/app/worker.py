@@ -213,8 +213,70 @@ async def google_sync_all(factory, *, now: datetime) -> dict:
     return await _per_user(factory, 'google_sync', users, run)
 
 
+async def _recently_active_users(factory, *, now: datetime) -> list[str]:
+    """Users with open tasks or any logged activity in the insight window (14 days)."""
+    async with factory() as session:
+        recent = set((await session.execute(select(distinct(ActivityEvent.user_id)).where(
+            ActivityEvent.occurred_at >= now - timedelta(days=14)))).scalars())
+    return sorted(recent | set(await _users_with_open_tasks(factory)))
+
+
+async def analytics_all(factory, *, now: datetime) -> dict:
+    """Nightly analytics: re-run the F6 inference rules so learned proposals stay current."""
+    from .services.preference_inference import run_inference
+
+    async def infer(session, user_id):
+        return bool(await run_inference(session, user_id, now=now))
+    return await _per_user(factory, 'analytics', await _recently_active_users(factory, now=now), infer)
+
+
+WEEKLY_INSIGHT_DAY = 6        # Sunday (Monday is 0)
+WEEKLY_INSIGHT_TIME = time(18, 0)
+
+
+async def weekly_insight(session, user_id: str, *, now: datetime, llm=None) -> bool:
+    """Sunday evening, local time: refresh the Insights suggestions once (PRD 5.6, worker jobs)."""
+    from .services.insight_service import compute_user_insights, generate_suggestions, store_suggestions
+    from .models import Suggestion
+    prefs = {row.key: row.value for row in (await session.execute(select(Preference).where(
+        Preference.user_id == user_id, Preference.status == 'active'))).scalars()}
+    zone = ZoneInfo(prefs.get('timezone', {}).get('name', 'UTC'))
+    local = now.astimezone(zone)
+    if local.weekday() != WEEKLY_INSIGHT_DAY or local.time() < WEEKLY_INSIGHT_TIME:
+        return False
+    midnight = datetime.combine(local.date(), time.min, tzinfo=zone).astimezone(timezone.utc)
+    if (await session.execute(select(ActivityEvent.id).where(ActivityEvent.user_id == user_id,
+            ActivityEvent.type == 'weekly_insights_built', ActivityEvent.occurred_at >= midnight))).first():
+        return False
+    session.add(ActivityEvent(user_id=user_id, type='weekly_insights_built', occurred_at=now,
+                              payload={'date': local.date().isoformat()}))
+    insights = await compute_user_insights(session, user_id, now=now)
+    items = await generate_suggestions(insights, llm)
+    # The weekly batch replaces last week's open suggestions.
+    await session.execute(update(Suggestion).where(Suggestion.user_id == user_id, Suggestion.status == 'active')
+                          .values(status='expired'))
+    if items:
+        await store_suggestions(session, user_id, items, now=now)
+    await session.flush()
+    return bool(items)
+
+
+async def weekly_insights(factory, *, now: datetime) -> dict:
+    from .services.llm_client import configured_llm
+    try:
+        llm = configured_llm()
+    except ValueError:
+        llm = None  # misconfigured provider: template wording still works
+
+    async def run(session, user_id):
+        return await weekly_insight(session, user_id, now=now, llm=llm)
+    return await _per_user(factory, 'weekly_insights', await _recently_active_users(factory, now=now), run)
+
+
 JOBS = {'rescore': (timedelta(hours=1), rescore_all), 'daily_plan': (timedelta(minutes=15), daily_plans),
         'retention': (timedelta(hours=24), retention),
+        'analytics': (timedelta(hours=24), analytics_all),
+        'weekly_insights': (timedelta(hours=1), weekly_insights),
         'google_sync': (timedelta(minutes=get_settings().google_sync_minutes), google_sync_all)}
 
 

@@ -117,6 +117,18 @@ async def compute_user_insights(session, user_id, *, now: datetime | None = None
         day = today - timedelta(days=offset)
         count = sum(1 for task in recent_done if _utc(task.completed_at).astimezone(zone).date() == day)
         chart.append({'date': day.isoformat(), 'completed': count})
+    # Per-day plan adherence for the metric card sparkline: blocks done / blocks planned that day.
+    by_day: dict = defaultdict(lambda: [0, 0])
+    for block in blocks:
+        key = _utc(block.start_at).astimezone(zone).date()
+        by_day[key][1] += 1
+        by_day[key][0] += block.status == 'done'
+    adherence_chart = []
+    for offset in range(HISTORY_DAYS - 1, -1, -1):
+        day = today - timedelta(days=offset)
+        done_count, planned_count = by_day.get(day, (0, 0))
+        adherence_chart.append({'date': day.isoformat(), 'planned': planned_count, 'done': done_count,
+                                'rate': round(done_count / planned_count, 2) if planned_count else None})
     due_recent = sum(v[1] for v in overdue.values())
     completion_rate = round(1 - sum(v[0] for v in overdue.values()) / due_recent, 2) if due_recent else None
     return {
@@ -130,6 +142,7 @@ async def compute_user_insights(session, user_id, *, now: datetime | None = None
         'completion_rate': completion_rate,
         'planned_blocks_14d': planned,
         'completion_chart': chart,
+        'adherence_chart': adherence_chart,
         'samples': len(samples),
     }
 
