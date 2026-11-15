@@ -1,8 +1,9 @@
 "use client";
 
+import { useAuth } from "@clerk/nextjs";
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useApi } from "@/hooks/use-api";
-import { API_URL, readableError, type Api } from "@/lib/api";
+import { API_URL, readableError, signedOutMessage, workspaceLoadStep, type Api } from "@/lib/api";
 import { browserTimezone, preferencesFromRows, preferenceUpdates, validatePreferences, validateTask } from "@/lib/task-utils";
 import type { EffortAnswer, PreferenceRow, Preferences, Task, TaskInput } from "@/lib/types";
 
@@ -26,6 +27,7 @@ const motionKey = "lifeos.reduced-motion";
 
 export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const api = useApi();
+  const { isLoaded, isSignedIn } = useAuth();
   const [tasks, setTasks] = useState<Task[]>([]);
   const [preferenceRows, setPreferenceRows] = useState<PreferenceRow[]>([]);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
@@ -61,7 +63,13 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     }
   }, [api, fallbackTimezone]);
 
-  useEffect(() => { load(); }, [load]);
+  // Right after sign-in Clerk is still loading and has no session token yet; loading then
+  // would report "signed out" until the user pressed Try again. Wait for Clerk first.
+  const step = workspaceLoadStep({ isLoaded, isSignedIn });
+  useEffect(() => {
+    if (step === "load") load();
+    else if (step === "signed-out") { setLoadError(signedOutMessage); setStatus("error"); }
+  }, [step, load]);
 
   useEffect(() => {
     try { setMotion(localStorage.getItem(motionKey) === "true"); } catch { /* storage unavailable */ }

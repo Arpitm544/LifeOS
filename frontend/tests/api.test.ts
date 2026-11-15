@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ApiError, createApi, errorMessage, undoPath } from "../src/lib/api.ts";
+import { ApiError, createApi, errorMessage, undoPath, workspaceLoadStep } from "../src/lib/api.ts";
 
 test("FastAPI error bodies become readable sentences", () => {
   assert.equal(errorMessage(404, { detail: "Task not found" }), "Task not found");
@@ -46,4 +46,10 @@ test("deleted tasks undo as a batch; other actions by id", () => {
   assert.equal(undoPath({ action_id: "a1", batch_id: "b1" }), "/api/actions/batches/b1/undo");
   assert.equal(undoPath({ action_id: "a1" }), "/api/actions/a1/undo");
   assert.equal(undoPath({ action_id: null }), null);
+});
+
+test("the workspace waits for Clerk before loading, so a fresh sign-in is not reported as signed out", () => {
+  assert.equal(workspaceLoadStep({ isLoaded: false, isSignedIn: undefined }), "wait");
+  assert.equal(workspaceLoadStep({ isLoaded: true, isSignedIn: true }), "load");
+  assert.equal(workspaceLoadStep({ isLoaded: true, isSignedIn: false }), "signed-out");
 });

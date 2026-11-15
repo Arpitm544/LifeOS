@@ -16,7 +16,7 @@ from datetime import datetime, time, timedelta, timezone
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import delete, distinct, select, text, update
+from sqlalchemy import delete, select, text, update
 
 from .config import get_settings
 from .models import (ActivityEvent, IdempotencyRecord, Message, Preference, PushSubscription, Reminder, Task,
@@ -118,7 +118,7 @@ async def _record_outcome(session, claim, result) -> tuple[int, int]:
 
 async def _users_with_open_tasks(factory) -> list[str]:
     async with factory() as session:
-        return list((await session.execute(select(distinct(Task.user_id)).where(
+        return list((await session.execute(select(Task.user_id).distinct().where(
             Task.status.in_(['open', 'blocked'])))).scalars())
 
 
@@ -216,7 +216,7 @@ async def google_sync_all(factory, *, now: datetime) -> dict:
 async def _recently_active_users(factory, *, now: datetime) -> list[str]:
     """Users with open tasks or any logged activity in the insight window (14 days)."""
     async with factory() as session:
-        recent = set((await session.execute(select(distinct(ActivityEvent.user_id)).where(
+        recent = set((await session.execute(select(ActivityEvent.user_id).distinct().where(
             ActivityEvent.occurred_at >= now - timedelta(days=14)))).scalars())
     return sorted(recent | set(await _users_with_open_tasks(factory)))
 
