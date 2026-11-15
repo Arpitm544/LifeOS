@@ -1,0 +1,20 @@
+FROM node:22-alpine AS build
+WORKDIR /app
+ENV NEXT_TELEMETRY_DISABLED=1
+COPY package.json package-lock.json ./
+RUN npm ci
+COPY . .
+ARG NEXT_PUBLIC_API_URL
+ARG NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY
+ARG NEXT_PUBLIC_CLERK_SIGN_IN_URL=/sign-in
+ARG NEXT_PUBLIC_CLERK_SIGN_UP_URL=/sign-up
+ARG NEXT_PUBLIC_CLERK_SIGN_IN_FALLBACK_REDIRECT_URL=/today
+ARG NEXT_PUBLIC_CLERK_SIGN_UP_FALLBACK_REDIRECT_URL=/today
+RUN npm run build && npm prune --omit=dev
+
+FROM node:22-alpine
+WORKDIR /app
+ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1
+COPY --from=build /app ./
+EXPOSE 3000
+CMD ["npx", "next", "start", "-H", "0.0.0.0", "-p", "3000"]
