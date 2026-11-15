@@ -1,12 +1,13 @@
 import { auth } from "@clerk/nextjs/server";
 import { parseVoices, speechResponse } from "@/lib/speech-service";
 
+import { isSameOrigin } from "@/lib/same-origin";
 import { voiceQuota } from "@/lib/voice-quota";
 
 export async function POST(request: Request) {
   const { userId, getToken } = await auth();
   if (!userId) return Response.json({ error: "Sign in to hear replies." }, { status: 401 });
-  if (request.headers.get("origin") !== new URL(request.url).origin) return Response.json({ error: "Invalid request origin." }, { status: 403 });
+  if (!isSameOrigin(request)) return Response.json({ error: "Invalid request origin." }, { status: 403 });
   // A language with no server voice (Hindi) is read by the device, so answer that before spending voice quota.
   const asked = await request.clone().json().catch(() => null) as { language?: unknown } | null;
   const language = typeof asked?.language === "string" ? asked.language.toLowerCase().split("-")[0] : "en";
